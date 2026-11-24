@@ -123,14 +123,14 @@
 
     .grid-main {
       display: grid;
-      grid-template-columns: 1.15fr 0.85fr;
+      grid-template-columns: minmax(0, 1.15fr) minmax(0, 0.85fr);
       gap: 16px;
       margin-bottom: 16px;
     }
 
     @media (max-width: 1080px) {
       .grid-main {
-        grid-template-columns: 1fr;
+        grid-template-columns: minmax(0, 1fr);
       }
     }
 
@@ -139,6 +139,8 @@
       border: 1px solid var(--border);
       border-radius: 12px;
       padding: 16px;
+      min-width: 0;
+      max-width: 100%;
     }
 
     .card-title {
@@ -273,7 +275,75 @@
       display: flex;
       flex-wrap: wrap;
       gap: 8px;
-      margin-bottom: 10px;
+      margin-bottom: 8px;
+    }
+
+    .seq-line-head {
+      display: flex;
+      justify-content: space-between;
+      align-items: baseline;
+      gap: 8px;
+      margin-bottom: 4px;
+    }
+
+    .seq-line {
+      display: flex;
+      flex-wrap: nowrap;
+      align-items: center;
+      gap: 6px;
+      width: 100%;
+      max-width: 100%;
+      min-width: 0;
+      overflow-x: auto;
+      white-space: nowrap;
+      min-height: 40px;
+      margin-bottom: 8px;
+      padding: 6px 8px;
+      background: var(--panel-2);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+    }
+
+    .seq-chip {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      flex: 0 0 auto;
+      padding: 3px 7px;
+      border-radius: 6px;
+      border: 1px solid var(--border);
+      background: var(--panel);
+      font-family: var(--mono);
+      font-size: 0.82rem;
+      font-weight: 700;
+    }
+
+    .seq-n {
+      color: var(--muted);
+      font-size: 0.68rem;
+      font-weight: 600;
+    }
+
+    .seq-empty {
+      color: var(--muted);
+      font-size: 0.76rem;
+    }
+
+    .seq-exact { border-color: rgba(74, 222, 128, 0.7); }
+    .seq-rank { border-color: rgba(56, 189, 248, 0.7); }
+    .seq-cat { border-color: rgba(251, 191, 36, 0.7); }
+    .seq-miss { border-color: rgba(248, 113, 113, 0.7); }
+
+    .seq-details {
+      margin-bottom: 12px;
+    }
+
+    .seq-details summary {
+      cursor: pointer;
+      color: var(--accent);
+      font-size: 0.8rem;
+      font-weight: 700;
+      margin-bottom: 8px;
     }
 
     input[type="text"] {
@@ -453,6 +523,32 @@
           <button id="btnAddSeq" class="primary">Deal Sequence</button>
         </div>
 
+        <div class="seq-line-head">
+          <span class="small-note">Dealt sequence, in the order entered</span>
+          <span class="small-note" id="historyCount">0 cards</span>
+        </div>
+        <div id="seqLine" class="seq-line" aria-label="Dealt card sequence"></div>
+        <details class="seq-details">
+          <summary>Expand complete prediction log</summary>
+          <div class="history-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>#</th>
+                  <th>Card</th>
+                  <th>Hi-Lo</th>
+                  <th>RC / TC</th>
+                  <th>Locked Pred (Exact / Rank / Cat)</th>
+                  <th>Result</th>
+                </tr>
+              </thead>
+              <tbody id="historyBody">
+                <tr><td colspan="6" style="color:var(--muted); text-align:center;">No cards dealt yet.</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </details>
+
         <div id="deckMatrix" class="deck-matrix"></div>
         <div class="small-note">Click any card above to record it as dealt in exact sequence (8 copies per exact card at start).</div>
       </div>
@@ -521,30 +617,6 @@
       <div id="codeStatus" class="code-status"></div>
     </div>
 
-    <!-- Dealt History Log -->
-    <div class="card">
-      <div class="card-title">
-        <span>4. Dealt Card Sequence &amp; Prediction Log</span>
-        <span class="small-note" id="historyCount">0 cards logged</span>
-      </div>
-      <div class="history-wrap">
-        <table>
-          <thead>
-            <tr>
-              <th>#</th>
-              <th>Card</th>
-              <th>Hi-Lo</th>
-              <th>RC / TC</th>
-              <th>Locked Pred (Exact / Rank / Cat)</th>
-              <th>Result</th>
-            </tr>
-          </thead>
-          <tbody id="historyBody">
-            <tr><td colspan="6" style="color:var(--muted); text-align:center;">No cards dealt yet.</td></tr>
-          </tbody>
-        </table>
-      </div>
-    </div>
   </div>
 
   <script>
@@ -1077,12 +1149,28 @@ function predictNextCard(state) {
       document.getElementById("scoreCat").textContent = `${appState.stats.catHits} / ${g}`;
       document.getElementById("rateCat").textContent = `${pct(appState.stats.catHits)}% (High/Neu/Low)`;
 
-      // History Table
-      document.getElementById("historyCount").textContent = `${appState.history.length} cards logged`;
+      // One-line sequence under the input, plus the expandable log
+      document.getElementById("historyCount").textContent = `${appState.history.length} cards`;
+      const seqLine = document.getElementById("seqLine");
       const tbody = document.getElementById("historyBody");
       if (appState.history.length === 0) {
+        seqLine.innerHTML = `<span class="seq-empty">No cards yet. Each card you deal shows here on one line, numbered in entry order.</span>`;
         tbody.innerHTML = `<tr><td colspan="6" style="color:var(--muted); text-align:center;">No cards dealt yet.</td></tr>`;
       } else {
+        seqLine.innerHTML = appState.history.map(row => {
+          const isRed = row.suit === "♥" || row.suit === "♦";
+          let cls = "seq-chip";
+          let title = "No prediction locked";
+          if (row.graded) {
+            if (row.graded.exactHit) { cls += " seq-exact"; title = "Exact hit"; }
+            else if (row.graded.rankHit) { cls += " seq-rank"; title = "Rank hit"; }
+            else if (row.graded.catHit) { cls += " seq-cat"; title = "Category hit"; }
+            else { cls += " seq-miss"; title = "Miss"; }
+          }
+          return `<span class="${cls}" title="${title}"><span class="seq-n">${row.index}</span><span class="${isRed ? "suit-red" : "suit-black"}">${row.code}</span></span>`;
+        }).join("");
+        seqLine.scrollLeft = seqLine.scrollWidth;
+
         tbody.innerHTML = [...appState.history].reverse().map(row => {
           const predStr = row.lockedPrediction
             ? `${row.lockedPrediction.exactCard} / ${row.lockedPrediction.topRank} / ${row.lockedPrediction.category}`
