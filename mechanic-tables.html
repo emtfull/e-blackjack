@@ -104,7 +104,8 @@
       </div>
       <div class="links">
         <a href="/">Prediction Lab</a>
-        <a href="/blackjack-player-table.html">Blackjack Live Table</a>
+        <a href="/player-simulation.html">Blackjack Live Table</a>
+        <a href="/official-table.html">Official table</a>
       </div>
     </header>
 
@@ -127,8 +128,9 @@
     <p class="note">
       <strong>Note:</strong> These shoes are not shuffled at random. Each table’s 416 cards
       (8 decks, eight of every card) come from a deterministic 5-agent mechanic system, so the
-      same profile and seed always rebuild the identical shoe. Blackjack Live Table (table 1)
-      stays on the prediction input and is never changed here.
+      same profile and seed always rebuild the identical shoe. The official table loads these
+      shoes when the player chooses Machine. Blackjack Live Table stays on its own sequence
+      and is the Live choice.
     </p>
     <div class="grid" id="tableGrid"></div>
   </div>
@@ -319,10 +321,21 @@
       }
     }
 
+    function publishSources(partial) {
+      try {
+        fetch("/api/sources", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(partial)
+        }).catch(() => {});
+      } catch (_) {}
+    }
+
     function saveStore(tables) {
       const payload = { tables, updatedAt: new Date().toISOString() };
       localStorage.setItem(STORAGE_KEY, JSON.stringify(payload));
       if (channel) channel.postMessage({ type: "casino", count: 5 });
+      publishSources({ machine: payload });
     }
 
     function paintCard(code) {
@@ -376,6 +389,8 @@
     const initial = readStore();
     if (!initial.complete) {
       saveStore(buildAllTables(currentProfile(), currentSeed()));
+    } else {
+      publishSources({ machine: { tables: initial.tables, updatedAt: new Date().toISOString() } });
     }
     render();
   </script>

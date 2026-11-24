@@ -7,7 +7,7 @@ Open two tabs on the same site when you want them to stay in step. One tab write
 | Page | Address | What it is |
 | --- | --- | --- |
 | Prediction Lab | `/` | Enter cards and run the next-card forecast |
-| Blackjack Live Table | `/blackjack-player-table.html` | The felt. Table 1 plays the entered sequence |
+| Blackjack Live Table | `/player-simulation.html` | The felt (player simulation). Table 1 plays the entered sequence |
 | e Blackjack | `/mechanic-tables.html` | Backend shoes for tables 2–6 |
 
 The felt page also holds the five e Blackjack tables. Use the buttons across the top to move between them. A table change is allowed only between hands.
@@ -88,7 +88,7 @@ The starting bankroll is $10,000. Reset $10,000 restores it. Dealer soft 17 can 
 
 ```
 index.html                    Prediction Lab, served at /
-blackjack-player-table.html   Felt for Blackjack Live Table and e Blackjack
+player-simulation.html        Felt (player simulation) for Blackjack Live Table and e Blackjack
 mechanic-tables.html          e Blackjack shoe backend
 vercel.json                   Sends the old lab filename to /
 ```

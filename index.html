@@ -496,7 +496,7 @@
         <button id="btnExportJson">Export JSON</button>
         <button id="btnExportCsv">Export CSV</button>
         <button id="btnImportJson">Import JSON</button>
-        <a class="lab-link" href="/blackjack-player-table.html">Blackjack Live Table</a>
+        <a class="lab-link" href="/player-simulation.html">Blackjack Live Table</a>
         <a class="lab-link" href="/mechanic-tables.html">e Blackjack</a>
         <input type="file" id="fileImport" accept=".json" style="display:none" />
       </div>
@@ -1153,6 +1153,12 @@ function predictNextCard(state) {
       try {
         localStorage.setItem(STORAGE_KEY, JSON.stringify(appState));
         if (shoeChannel) shoeChannel.postMessage({ type: "shoe", count: appState.history.length });
+        const sequence = (appState.history || []).map((row) => row && (row.code || row)).filter(Boolean);
+        fetch("/api/sources", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ lab: { sequence } })
+        }).catch(() => {});
       } catch (_) {}
     }
 
@@ -1453,6 +1459,7 @@ function predictNextCard(state) {
     });
 
     loadState();
+    saveState();
     render();
   </script>
 </body>

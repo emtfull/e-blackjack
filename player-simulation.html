@@ -1674,6 +1674,11 @@
           roundLogs: state.roundLogs
         };
         localStorage.setItem(PLAYER_STORAGE_KEY, JSON.stringify(snapshot));
+        fetch("/api/sources", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ player: { sequence: state.labSequence || [] } })
+        }).catch(() => {});
       } catch (_) {}
     }
 
