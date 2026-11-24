@@ -692,6 +692,25 @@
       font-size: 0.75rem;
       color: var(--muted);
     }
+
+    .table-menu {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-bottom: 8px;
+    }
+
+    .table-pick.active {
+      background: #0369a1;
+      border-color: #38bdf8;
+      color: #ffffff;
+    }
+
+    .table-menu-note {
+      margin: 0 0 14px;
+      color: var(--muted);
+      font-size: 0.8rem;
+    }
   </style>
 </head>
 <body>
@@ -702,7 +721,7 @@
         <a href="index.html" class="nav-back" title="Return to Backend Prediction Lab">&larr; Back to Backend Lab</a>
         <div>
           <h1>Blackjack Player Table — Live Felt</h1>
-          <p>Deals cards in exact chronological sequence from the Backend Prediction Lab shoe</p>
+          <p>Table 1 plays the lab sequence in the order entered. Tables 2–6 each play their own 416-card dealer shoe.</p>
         </div>
       </div>
 
@@ -715,6 +734,16 @@
         </div>
       </div>
     </header>
+
+    <nav class="table-menu" id="tableMenu" aria-label="Choose a blackjack table">
+      <button type="button" class="table-pick active" data-table="1">Table 1 · Lab sequence</button>
+      <button type="button" class="table-pick" data-table="2">Table 2</button>
+      <button type="button" class="table-pick" data-table="3">Table 3</button>
+      <button type="button" class="table-pick" data-table="4">Table 4</button>
+      <button type="button" class="table-pick" data-table="5">Table 5</button>
+      <button type="button" class="table-pick" data-table="6">Table 6</button>
+    </nav>
+    <p class="table-menu-note" id="tableMenuNote">Table 1 plays the Backend Lab dealt sequence, in the order entered.</p>
 
     <div class="workspace">
       <!-- Left: Casino Felt Table -->
@@ -837,8 +866,11 @@
 
           <div class="side-row">
             <button id="btnSyncBackend" class="btn-blue">Sync Backend</button>
-            <button id="btnRestartPointer">Restart Shoe #1</button>
+            <button id="btnRestartPointer">Restart This Shoe</button>
             <button id="btnTogglePeek">Peek Next Card</button>
+          </div>
+          <div class="side-row">
+            <button id="btnNewDealerShoes" style="width:100%;">New 416-card shoes for Tables 2–6</button>
           </div>
 
           <div class="side-row">
@@ -910,9 +942,13 @@
       peekNext: false,
 
       // Sequence shoe state
-      sourceLabel: "Backend Sync",
-      sequence: [], // array of normalized card strings e.g. ["K♠", "7♦", ...]
+      sourceLabel: "Table 1 · Lab sequence",
+      sequence: [], // cards the active table is dealing
       pointer: 0,   // next index to draw
+      activeTable: 1,
+      labSequence: [],
+      pointers: { 1: 0, 2: 0, 3: 0, 4: 0, 5: 0, 6: 0 },
+      dealerShoes: null,
 
       // Active round state
       phase: "BETTING", // BETTING | INSURANCE | PLAYER_TURN | SETTLED
@@ -1006,6 +1042,81 @@
       return sorted === "6-7-8";
     }
 
+    // Lead-dealer shoes: five separate 8-deck shoes, 416 cards each.
+    function buildOneDealerShoe() {
+      const ranks = ["A", "2", "3", "4", "5", "6", "7", "8", "9", "10", "J", "Q", "K"];
+      const suits = ["♠", "♥", "♦", "♣"];
+      const cards = [];
+      for (let deck = 0; deck < 8; deck++) {
+        for (const rank of ranks) {
+          for (const suit of suits) cards.push(rank + suit);
+        }
+      }
+      for (let i = cards.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        const swap = cards[i];
+        cards[i] = cards[j];
+        cards[j] = swap;
+      }
+      return cards;
+    }
+
+    function buildLeadDealerShoes() {
+      return [buildOneDealerShoe(), buildOneDealerShoe(), buildOneDealerShoe(), buildOneDealerShoe(), buildOneDealerShoe()];
+    }
+
+    function ensureDealerShoes() {
+      const shoes = state.dealerShoes;
+      const ok = Array.isArray(shoes) && shoes.length === 5 && shoes.every((shoe) => Array.isArray(shoe) && shoe.length === 416);
+      if (!ok) state.dealerShoes = buildLeadDealerShoes();
+    }
+
+    function rememberPointer() {
+      if (!state.pointers) state.pointers = { 1: 0, 2: 0, 3: 0, 4: 0, 5: 0, 6: 0 };
+      state.pointers[state.activeTable] = state.pointer;
+    }
+
+    function activateTableShoe() {
+      ensureDealerShoes();
+      if (!state.pointers) state.pointers = { 1: 0, 2: 0, 3: 0, 4: 0, 5: 0, 6: 0 };
+      if (state.activeTable === 1) {
+        state.sequence = (state.labSequence || []).slice();
+        state.pointer = state.pointers[1] || 0;
+        if (state.pointer > state.sequence.length) state.pointer = 0;
+        state.sourceLabel = state.sequence.length
+          ? `Table 1 · Lab sequence (${state.sequence.length})`
+          : "Table 1 · Lab sequence empty";
+        return;
+      }
+      const shoe = state.dealerShoes[state.activeTable - 2];
+      state.sequence = shoe.slice();
+      state.pointer = state.pointers[state.activeTable] || 0;
+      if (state.pointer > state.sequence.length) state.pointer = 0;
+      state.sourceLabel = `Table ${state.activeTable} · Dealer shoe (416)`;
+    }
+
+    function selectTable(tableNumber) {
+      const next = Number(tableNumber);
+      if (!next || next < 1 || next > 6 || next === state.activeTable) return;
+      if (state.phase !== "BETTING") {
+        setBanner("Finish this hand first", "Change tables between hands.");
+        return;
+      }
+      rememberPointer();
+      state.activeTable = next;
+      state.dealerCards = [];
+      state.playerHands = [];
+      activateTableShoe();
+      setBanner(
+        `Table ${next}`,
+        next === 1
+          ? "Playing the Backend Lab sequence in the order entered."
+          : "Playing this table's 416-card dealer shoe."
+      );
+      savePlayerState();
+      render();
+    }
+
     // --- Backend Sequence Loading ---
     function loadFromBackendStorage(silent = false) {
       try {
@@ -1014,19 +1125,17 @@
           const parsed = JSON.parse(raw);
           if (Array.isArray(parsed.history)) {
             const seq = parsed.history.map(h => parseCardToken(typeof h === "string" ? h : (h && h.code))).filter(Boolean);
-            const extended = state.sourceLabel === "Backend Lab (localStorage)"
-              && seq.length >= state.sequence.length
-              && state.sequence.every((card, idx) => seq[idx] === card);
-            state.sequence = seq;
-            state.sourceLabel = "Backend Lab (localStorage)";
-            if (!extended) state.pointer = 0;
-            else if (state.pointer > seq.length) state.pointer = seq.length;
+            const prev = state.labSequence || [];
+            const extended = seq.length >= prev.length && prev.every((card, idx) => seq[idx] === card);
+            state.labSequence = seq;
+            if (!extended) state.pointers[1] = 0;
+            if (state.activeTable === 1) activateTableShoe();
             if (!silent) {
               setBanner(
                 seq.length ? "Synced with Backend Prediction Lab" : "Backend shoe is empty",
                 seq.length
-                  ? `Loaded ${seq.length} dealt cards in exact order.`
-                  : "Deal cards in the Backend Lab. They appear here in that same order."
+                  ? `Table 1 has ${seq.length} cards in the order entered.`
+                  : "Deal cards in the Backend Lab. Table 1 plays them in that order."
               );
             }
             savePlayerState();
@@ -1036,10 +1145,11 @@
         }
       } catch (_) {}
 
-      if (state.sequence.length === 0) {
-        state.sequence = [...DEMO_SEQUENCE];
-        state.sourceLabel = "Built-In Demo Shoe";
-        state.pointer = 0;
+      if ((state.labSequence || []).length === 0 && state.activeTable === 1 && state.sequence.length === 0) {
+        state.labSequence = [...DEMO_SEQUENCE];
+        state.pointers[1] = 0;
+        activateTableShoe();
+        state.sourceLabel = "Table 1 · Built-in demo";
       }
       if (!silent) {
         setBanner("No Backend History Found Yet", "Loaded built-in demo sequence. Enter cards in Backend Lab and click Sync Backend.");
@@ -1058,6 +1168,7 @@
       }
       const card = state.sequence[state.pointer];
       state.pointer += 1;
+      rememberPointer();
       return card;
     }
 
@@ -1544,6 +1655,7 @@
     // --- Persistence ---
     function savePlayerState() {
       try {
+        rememberPointer();
         const snapshot = {
           bankroll: state.bankroll,
           selectedChip: state.selectedChip,
@@ -1553,6 +1665,10 @@
           sourceLabel: state.sourceLabel,
           sequence: state.sequence,
           pointer: state.pointer,
+          activeTable: state.activeTable,
+          labSequence: state.labSequence,
+          pointers: state.pointers,
+          dealerShoes: state.dealerShoes,
           roundLogs: state.roundLogs
         };
         localStorage.setItem(PLAYER_STORAGE_KEY, JSON.stringify(snapshot));
@@ -1567,8 +1683,13 @@
           Object.assign(state, saved);
         }
       } catch (_) {}
+      if (!state.pointers) state.pointers = { 1: 0, 2: 0, 3: 0, 4: 0, 5: 0, 6: 0 };
+      if (!Array.isArray(state.labSequence)) state.labSequence = [];
+      if (!state.activeTable) state.activeTable = 1;
+      ensureDealerShoes();
       // Always check if backend lab has newer dealt cards
       loadFromBackendStorage(true);
+      activateTableShoe();
     }
 
     // --- Render ---
@@ -1593,18 +1714,35 @@
       document.getElementById("btnTogglePeek").textContent = state.peekNext ? "Hide Next Card" : "Peek Next Card";
 
       const badge = document.getElementById("syncModeBadge");
-      if (state.sourceLabel.includes("Backend")) {
+      if (state.activeTable === 1) {
         badge.className = "badge badge-live";
-        badge.textContent = "BACKEND SYNC";
+        badge.textContent = "LAB SEQUENCE";
       } else {
         badge.className = "badge badge-demo";
-        badge.textContent = "CUSTOM / DEMO";
+        badge.textContent = "DEALER SHOE";
+      }
+
+      document.querySelectorAll(".table-pick").forEach((btn) => {
+        const n = Number(btn.dataset.table);
+        btn.classList.toggle("active", n === state.activeTable);
+        if (n === 1) btn.textContent = `Table 1 · Lab (${(state.labSequence || []).length})`;
+      });
+      const note = document.getElementById("tableMenuNote");
+      if (note) {
+        note.textContent = state.activeTable === 1
+          ? "Table 1 plays the Backend Lab dealt sequence, in the order entered. The length is however many cards you logged. A full shoe is 416."
+          : `Table ${state.activeTable} plays its own lead-dealer shoe of 416 cards. Tables 2–6 do not use the lab sequence.`;
       }
 
       // Sequence Ribbon
       const ribbon = document.getElementById("seqRibbon");
       if (totalSeq === 0) {
         ribbon.textContent = "No cards in sequence.";
+      } else if (state.activeTable !== 1 && !state.peekNext) {
+        const dealt = state.sequence.slice(0, state.pointer);
+        ribbon.innerHTML = dealt.length
+          ? dealt.map((c) => `<span class="seq-token dealt">${c}</span>`).join("") + `<span class="seq-token next-up">??</span>`
+          : "416-card dealer shoe is ready. Upcoming cards stay hidden.";
       } else {
         ribbon.innerHTML = state.sequence.map((c, idx) => {
           const cls = idx < state.pointer ? "dealt" : idx === state.pointer ? "next-up" : "";
@@ -1759,13 +1897,34 @@
     document.getElementById("btnSyncBackend").addEventListener("click", () => loadFromBackendStorage(false));
 
     document.getElementById("btnRestartPointer").addEventListener("click", () => {
+      if (state.phase !== "BETTING") {
+        setBanner("Finish this hand first", "Restart the shoe between hands.");
+        return;
+      }
       state.pointer = 0;
-      state.phase = "BETTING";
+      rememberPointer();
       state.dealerCards = [];
       state.playerHands = [];
-      setBanner("Shoe Pointer Reset to Card #1", "Ready to replay the sequence from the beginning.");
+      setBanner("Shoe restarted at card 1", `Table ${state.activeTable} will deal from the start of its sequence.`);
       savePlayerState();
       render();
+    });
+
+    document.getElementById("btnNewDealerShoes").addEventListener("click", () => {
+      if (state.phase !== "BETTING") {
+        setBanner("Finish this hand first", "New dealer shoes can be built between hands.");
+        return;
+      }
+      state.dealerShoes = buildLeadDealerShoes();
+      [2, 3, 4, 5, 6].forEach((n) => { state.pointers[n] = 0; });
+      if (state.activeTable !== 1) activateTableShoe();
+      setBanner("Five new dealer shoes ready", "Tables 2–6 each have a new 416-card shoe. Table 1 is unchanged.");
+      savePlayerState();
+      render();
+    });
+
+    document.querySelectorAll(".table-pick").forEach((btn) => {
+      btn.addEventListener("click", () => selectTable(btn.dataset.table));
     });
 
     document.getElementById("btnTogglePeek").addEventListener("click", () => {
@@ -1775,9 +1934,11 @@
     });
 
     document.getElementById("btnLoadDemo").addEventListener("click", () => {
-      state.sequence = [...DEMO_SEQUENCE];
-      state.pointer = 0;
-      state.sourceLabel = "Built-In Demo Shoe";
+      state.labSequence = [...DEMO_SEQUENCE];
+      state.pointers[1] = 0;
+      state.activeTable = 1;
+      activateTableShoe();
+      state.sourceLabel = "Table 1 · Built-in demo";
       state.phase = "BETTING";
       state.dealerCards = [];
       state.playerHands = [];
@@ -1794,9 +1955,11 @@
         setBanner("Invalid or Too Short Sequence", "Enter at least 4 valid cards like: Ks, 7d, Ac, 10h");
         return;
       }
-      state.sequence = parsed;
-      state.pointer = 0;
-      state.sourceLabel = "Custom Pasted Sequence";
+      state.labSequence = parsed;
+      state.pointers[1] = 0;
+      state.activeTable = 1;
+      activateTableShoe();
+      state.sourceLabel = `Table 1 · Pasted sequence (${parsed.length})`;
       state.phase = "BETTING";
       state.dealerCards = [];
       state.playerHands = [];
@@ -1818,9 +1981,11 @@
           const data = JSON.parse(reader.result);
           const list = Array.isArray(data.history) ? data.history.map(h => parseCardToken(h.code || h)).filter(Boolean) : [];
           if (list.length === 0) throw new Error("No valid dealt cards found in JSON.");
-          state.sequence = list;
-          state.pointer = 0;
-          state.sourceLabel = `Imported JSON (${file.name})`;
+          state.labSequence = list;
+          state.pointers[1] = 0;
+          state.activeTable = 1;
+          activateTableShoe();
+          state.sourceLabel = `Table 1 · Imported JSON (${file.name})`;
           state.phase = "BETTING";
           state.dealerCards = [];
           state.playerHands = [];
