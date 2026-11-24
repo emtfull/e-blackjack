@@ -727,7 +727,9 @@
     function feedDetail() {
       const left = cardsLeft();
       if (state.loadMode === "machine") {
-        if (!state.shoeLen) return "Machine shoes are not set yet. Build them on e Blackjack.";
+        if (!state.shoeLen) {
+          return `e Blackjack ${state.machineTable} has 0 cards. Open e Blackjack backend and click Build all 5 shoes.`;
+        }
         return `e Blackjack ${state.machineTable} · ${left} of ${state.shoeLen} cards left`;
       }
       if (!state.shoeLen) return "Blackjack Live Table has no sequence yet.";
