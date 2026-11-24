@@ -1,0 +1,210 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>e Blackjack — Tables 2–6</title>
+  <style>
+    :root {
+      --bg: #0b0f17;
+      --panel: #121826;
+      --panel-2: #182133;
+      --border: #263248;
+      --text: #e6edf7;
+      --muted: #8fa1bf;
+      --accent: #38bdf8;
+      --accent-2: #22c55e;
+      --red-suit: #f87171;
+      --mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+      --sans: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      padding: 16px;
+      background: var(--bg);
+      color: var(--text);
+      font-family: var(--sans);
+      line-height: 1.45;
+    }
+    .container { max-width: 1100px; margin: 0 auto; }
+    header, .card {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+    }
+    header {
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: space-between;
+      align-items: center;
+      gap: 12px;
+      padding: 14px 18px;
+      margin-bottom: 16px;
+    }
+    header h1 { margin: 0; font-size: 1.2rem; }
+    header p { margin: 2px 0 0; color: var(--muted); font-size: 0.85rem; }
+    .actions, .links { display: flex; flex-wrap: wrap; gap: 8px; }
+    a, button {
+      background: var(--panel-2);
+      color: var(--text);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 8px 12px;
+      font-size: 0.85rem;
+      font-weight: 600;
+      text-decoration: none;
+      cursor: pointer;
+    }
+    button.primary { background: #0369a1; border-color: #38bdf8; }
+    .status {
+      margin: 0 0 16px;
+      color: var(--muted);
+      font-size: 0.85rem;
+    }
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+      gap: 12px;
+    }
+    .card { padding: 14px 16px; min-width: 0; }
+    .card h2 { margin: 0 0 4px; font-size: 1rem; }
+    .meta { color: var(--muted); font-size: 0.8rem; margin-bottom: 10px; }
+    .preview {
+      font-family: var(--mono);
+      font-size: 0.78rem;
+      white-space: nowrap;
+      overflow-x: auto;
+      padding: 8px 10px;
+      background: var(--panel-2);
+      border-radius: 8px;
+      margin-bottom: 10px;
+    }
+    .red { color: var(--red-suit); }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <header>
+      <div>
+        <h1>e Blackjack</h1>
+        <p>Tables 2–6. Each shoe is a fair 8-deck shuffle of 416 cards. Blackjack Live Table stays on the prediction input.</p>
+      </div>
+      <div class="links">
+        <a href="/">Prediction Lab</a>
+        <a href="/blackjack-player-table.html">Blackjack Live Table</a>
+      </div>
+    </header>
+
+    <div class="actions" style="margin-bottom:12px;">
+      <button id="btnBuildAll" class="primary">Build all 5 shoes</button>
+    </div>
+    <p class="status" id="statusLine">Loading e Blackjack shoes…</p>
+    <div class="grid" id="tableGrid"></div>
+  </div>
+
+  <script>
+    const STORAGE_KEY = "bj_casino_tables_v1";
+    const RANKS = ["A", "2", "3", "4", "5", "6", "7", "8", "9", "10", "J", "Q", "K"];
+    const SUITS = ["♠", "♥", "♦", "♣"];
+    const TABLE_NUMBERS = [2, 3, 4, 5, 6];
+
+    let channel = null;
+    try { channel = new BroadcastChannel("bj_shoe_sync"); } catch (_) {}
+
+    function buildOneShoe() {
+      const cards = [];
+      for (let deck = 0; deck < 8; deck++) {
+        for (const rank of RANKS) {
+          for (const suit of SUITS) cards.push(rank + suit);
+        }
+      }
+      for (let i = cards.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        const swap = cards[i];
+        cards[i] = cards[j];
+        cards[j] = swap;
+      }
+      return cards;
+    }
+
+    function emptyTables() {
+      return { "2": [], "3": [], "4": [], "5": [], "6": [] };
+    }
+
+    function readStore() {
+      try {
+        const parsed = JSON.parse(localStorage.getItem(STORAGE_KEY) || "null");
+        const tables = (parsed && parsed.tables) || {};
+        const next = emptyTables();
+        let complete = true;
+        TABLE_NUMBERS.forEach((n) => {
+          const shoe = tables[n] || tables[String(n)];
+          if (Array.isArray(shoe) && shoe.length === 416) next[String(n)] = shoe.slice();
+          else complete = false;
+        });
+        return { tables: next, complete };
+      } catch (_) {
+        return { tables: emptyTables(), complete: false };
+      }
+    }
+
+    function saveStore(tables) {
+      const payload = { tables, updatedAt: new Date().toISOString() };
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(payload));
+      if (channel) channel.postMessage({ type: "casino", count: 5 });
+    }
+
+    function paintCard(code) {
+      const red = code.endsWith("♥") || code.endsWith("♦");
+      return `<span class="${red ? "red" : ""}">${code}</span>`;
+    }
+
+    function render() {
+      const { tables, complete } = readStore();
+      const grid = document.getElementById("tableGrid");
+      document.getElementById("statusLine").textContent = complete
+        ? "e Blackjack 2–6 each have a 416-card shoe. The player felt reads these shoes."
+        : "Build the five shoes. Each one is 416 cards, eight of every rank and suit.";
+      grid.innerHTML = TABLE_NUMBERS.map((n) => {
+        const shoe = tables[String(n)] || [];
+        const preview = shoe.length
+          ? shoe.slice(0, 18).map(paintCard).join(" ")
+          : "No shoe yet";
+        return `
+          <article class="card">
+            <h2>e Blackjack ${n}</h2>
+            <div class="meta">${shoe.length ? shoe.length + " / 416 cards" : "Empty"}</div>
+            <div class="preview">${preview}</div>
+            <button type="button" data-reshuffle="${n}">Reshuffle this shoe</button>
+          </article>`;
+      }).join("");
+    }
+
+    document.getElementById("btnBuildAll").addEventListener("click", () => {
+      const tables = emptyTables();
+      TABLE_NUMBERS.forEach((n) => { tables[String(n)] = buildOneShoe(); });
+      saveStore(tables);
+      render();
+    });
+
+    document.getElementById("tableGrid").addEventListener("click", (event) => {
+      const button = event.target.closest("[data-reshuffle]");
+      if (!button) return;
+      const n = button.dataset.reshuffle;
+      const { tables } = readStore();
+      tables[String(n)] = buildOneShoe();
+      saveStore(tables);
+      render();
+    });
+
+    const initial = readStore();
+    if (!initial.complete) {
+      const tables = emptyTables();
+      TABLE_NUMBERS.forEach((n) => { tables[String(n)] = buildOneShoe(); });
+      saveStore(tables);
+    }
+    render();
+  </script>
+</body>
+</html>

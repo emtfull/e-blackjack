@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Blackjack Player Table — Live Felt &amp; Backend Sequence Engine</title>
+  <title>Blackjack Live Table &amp; e Blackjack</title>
   <style>
     :root {
       --bg-dark: #06090e;
@@ -719,9 +719,10 @@
     <header class="topbar">
       <div class="topbar-left">
         <a href="index.html" class="nav-back" title="Return to Backend Prediction Lab">&larr; Back to Backend Lab</a>
+        <a href="/casino-tables.html" class="nav-back" title="e Blackjack backend for tables 2–6">e Blackjack</a>
         <div>
-          <h1>Blackjack Player Table — Live Felt</h1>
-          <p>Table 1 plays the lab sequence in the order entered. Tables 2–6 each play their own 416-card dealer shoe.</p>
+          <h1>Blackjack Live Table</h1>
+          <p>Blackjack Live Table follows the prediction input, however many cards were entered. e Blackjack 2–6 each play a full 416-card shoe.</p>
         </div>
       </div>
 
@@ -736,14 +737,14 @@
     </header>
 
     <nav class="table-menu" id="tableMenu" aria-label="Choose a blackjack table">
-      <button type="button" class="table-pick active" data-table="1">Table 1 · Lab sequence</button>
-      <button type="button" class="table-pick" data-table="2">Table 2</button>
-      <button type="button" class="table-pick" data-table="3">Table 3</button>
-      <button type="button" class="table-pick" data-table="4">Table 4</button>
-      <button type="button" class="table-pick" data-table="5">Table 5</button>
-      <button type="button" class="table-pick" data-table="6">Table 6</button>
+      <button type="button" class="table-pick active" data-table="1">Blackjack Live Table</button>
+      <button type="button" class="table-pick" data-table="2">e Blackjack 2</button>
+      <button type="button" class="table-pick" data-table="3">e Blackjack 3</button>
+      <button type="button" class="table-pick" data-table="4">e Blackjack 4</button>
+      <button type="button" class="table-pick" data-table="5">e Blackjack 5</button>
+      <button type="button" class="table-pick" data-table="6">e Blackjack 6</button>
     </nav>
-    <p class="table-menu-note" id="tableMenuNote">Table 1 plays the Backend Lab dealt sequence, in the order entered.</p>
+    <p class="table-menu-note" id="tableMenuNote">Blackjack Live Table plays the prediction sequence in the order entered. The length follows that input.</p>
 
     <div class="workspace">
       <!-- Left: Casino Felt Table -->
@@ -849,7 +850,7 @@
         <!-- Backend Sequence Sync Panel -->
         <div class="side-card">
           <h2>
-            <span>Backend Sequence Shoe</span>
+            <span>Active Shoe</span>
             <span class="badge badge-live" id="syncModeBadge">SYNCED</span>
           </h2>
 
@@ -870,7 +871,8 @@
             <button id="btnTogglePeek">Peek Next Card</button>
           </div>
           <div class="side-row">
-            <button id="btnNewDealerShoes" style="width:100%;">New 416-card shoes for Tables 2–6</button>
+            <button id="btnSyncCasino" class="btn-blue">Sync e Blackjack</button>
+            <a href="/casino-tables.html" class="nav-back">Open e Blackjack</a>
           </div>
 
           <div class="side-row">
@@ -913,6 +915,7 @@
 
   <script>
     const BACKEND_STORAGE_KEY = "bj_prediction_lab_v1";
+    const CASINO_STORAGE_KEY = "bj_casino_tables_v1";
     const PLAYER_STORAGE_KEY = "bj_player_table_v1";
     const RANKS = ["A", "2", "3", "4", "5", "6", "7", "8", "9", "10", "J", "Q", "K"];
     const SUIT_MAP = { "♠": "♠", "s": "♠", "♥": "♥", "h": "♥", "♦": "♦", "d": "♦", "♣": "♣", "c": "♣" };
@@ -931,7 +934,7 @@
       peekNext: false,
 
       // Sequence shoe state
-      sourceLabel: "Table 1 · Lab sequence",
+      sourceLabel: "Blackjack Live Table",
       sequence: [], // cards the active table is dealing
       pointer: 0,   // next index to draw
       activeTable: 1,
@@ -1031,33 +1034,47 @@
       return sorted === "6-7-8";
     }
 
-    // Lead-dealer shoes: five separate 8-deck shoes, 416 cards each.
-    function buildOneDealerShoe() {
-      const ranks = ["A", "2", "3", "4", "5", "6", "7", "8", "9", "10", "J", "Q", "K"];
-      const suits = ["♠", "♥", "♦", "♣"];
-      const cards = [];
-      for (let deck = 0; deck < 8; deck++) {
-        for (const rank of ranks) {
-          for (const suit of suits) cards.push(rank + suit);
-        }
-      }
-      for (let i = cards.length - 1; i > 0; i--) {
-        const j = Math.floor(Math.random() * (i + 1));
-        const swap = cards[i];
-        cards[i] = cards[j];
-        cards[j] = swap;
-      }
-      return cards;
-    }
-
-    function buildLeadDealerShoes() {
-      return [buildOneDealerShoe(), buildOneDealerShoe(), buildOneDealerShoe(), buildOneDealerShoe(), buildOneDealerShoe()];
+    function readCasinoShoes() {
+      try {
+        const raw = localStorage.getItem(CASINO_STORAGE_KEY);
+        if (!raw) return null;
+        const parsed = JSON.parse(raw);
+        const tables = parsed.tables || {};
+        const shoes = [2, 3, 4, 5, 6].map((n) => tables[n] || tables[String(n)]);
+        if (shoes.every((shoe) => Array.isArray(shoe) && shoe.length === 416)) return shoes;
+      } catch (_) {}
+      return null;
     }
 
     function ensureDealerShoes() {
+      const fromCasino = readCasinoShoes();
+      if (fromCasino) {
+        state.dealerShoes = fromCasino;
+        return;
+      }
       const shoes = state.dealerShoes;
       const ok = Array.isArray(shoes) && shoes.length === 5 && shoes.every((shoe) => Array.isArray(shoe) && shoe.length === 416);
-      if (!ok) state.dealerShoes = buildLeadDealerShoes();
+      if (!ok) state.dealerShoes = [[], [], [], [], []];
+    }
+
+    function loadCasinoShoes(silent = false) {
+      const shoes = readCasinoShoes();
+      if (!shoes) {
+        if (!silent) setBanner("e Blackjack has no shoes yet", "Open e Blackjack and build the five 416-card shoes.");
+        return false;
+      }
+      const previous = Array.isArray(state.dealerShoes) ? state.dealerShoes : [];
+      shoes.forEach((shoe, index) => {
+        const tableNumber = index + 2;
+        const old = previous[index];
+        if (!old || old.join("|") !== shoe.join("|")) state.pointers[tableNumber] = 0;
+      });
+      state.dealerShoes = shoes;
+      if (state.activeTable !== 1) activateTableShoe();
+      if (!silent) setBanner("Synced e Blackjack", "e Blackjack 2–6 are using the shoes from the casino backend.");
+      savePlayerState();
+      render();
+      return true;
     }
 
     function rememberPointer() {
@@ -1073,15 +1090,17 @@
         state.pointer = state.pointers[1] || 0;
         if (state.pointer > state.sequence.length) state.pointer = 0;
         state.sourceLabel = state.sequence.length
-          ? `Table 1 · Lab sequence (${state.sequence.length})`
-          : "Table 1 · Lab sequence empty";
+          ? `Blackjack Live Table (${state.sequence.length})`
+          : "Blackjack Live Table · empty";
         return;
       }
-      const shoe = state.dealerShoes[state.activeTable - 2];
+      const shoe = (state.dealerShoes && state.dealerShoes[state.activeTable - 2]) || [];
       state.sequence = shoe.slice();
       state.pointer = state.pointers[state.activeTable] || 0;
       if (state.pointer > state.sequence.length) state.pointer = 0;
-      state.sourceLabel = `Table ${state.activeTable} · Dealer shoe (416)`;
+      state.sourceLabel = shoe.length === 416
+        ? `e Blackjack ${state.activeTable} · 416`
+        : `e Blackjack ${state.activeTable} · waiting for shoes`;
     }
 
     function selectTable(tableNumber) {
@@ -1099,8 +1118,8 @@
       setBanner(
         `Table ${next}`,
         next === 1
-          ? "Playing the Backend Lab sequence in the order entered."
-          : "Playing this table's 416-card dealer shoe."
+          ? "Playing the prediction sequence in the order entered."
+          : "Playing this e Blackjack shoe from the casino backend."
       );
       savePlayerState();
       render();
@@ -1123,8 +1142,8 @@
               setBanner(
                 seq.length ? "Synced with Backend Prediction Lab" : "Backend shoe is empty",
                 seq.length
-                  ? `Table 1 has ${seq.length} cards in the order entered.`
-                  : "Deal cards in the Backend Lab. Table 1 plays them in that order."
+                  ? `Blackjack Live Table has ${seq.length} cards in the order entered.`
+                  : "Deal cards in the prediction lab. Blackjack Live Table plays them in that order."
               );
             }
             savePlayerState();
@@ -1135,7 +1154,7 @@
       } catch (_) {}
 
       if (!silent) {
-        setBanner("No lab sequence yet", "Deal cards in the Backend Lab. Table 1 plays that list in the order entered.");
+        setBanner("No lab sequence yet", "Deal cards in the prediction lab. Blackjack Live Table plays that list in the order entered.");
       }
       render();
       return false;
@@ -1699,22 +1718,22 @@
       const badge = document.getElementById("syncModeBadge");
       if (state.activeTable === 1) {
         badge.className = "badge badge-live";
-        badge.textContent = "LAB SEQUENCE";
+        badge.textContent = "LIVE TABLE";
       } else {
         badge.className = "badge badge-demo";
-        badge.textContent = "DEALER SHOE";
+        badge.textContent = "e BLACKJACK";
       }
 
       document.querySelectorAll(".table-pick").forEach((btn) => {
         const n = Number(btn.dataset.table);
         btn.classList.toggle("active", n === state.activeTable);
-        if (n === 1) btn.textContent = `Table 1 · Lab (${(state.labSequence || []).length})`;
+        if (n === 1) btn.textContent = `Blackjack Live Table (${(state.labSequence || []).length})`;
       });
       const note = document.getElementById("tableMenuNote");
       if (note) {
         note.textContent = state.activeTable === 1
-          ? "Table 1 plays the Backend Lab dealt sequence, in the order entered. The length is however many cards you logged. A full shoe is 416."
-          : `Table ${state.activeTable} plays its own lead-dealer shoe of 416 cards. Tables 2–6 do not use the lab sequence.`;
+          ? "Blackjack Live Table plays the prediction sequence in the order entered. The length is however many cards were logged."
+          : `e Blackjack ${state.activeTable} plays its 416-card shoe from the casino backend.`;
       }
 
       // Sequence Ribbon
@@ -1725,7 +1744,7 @@
         const dealt = state.sequence.slice(0, state.pointer);
         ribbon.innerHTML = dealt.length
           ? dealt.map((c) => `<span class="seq-token dealt">${c}</span>`).join("") + `<span class="seq-token next-up">??</span>`
-          : "416-card dealer shoe is ready. Upcoming cards stay hidden.";
+          : "e Blackjack shoe is ready. Upcoming cards stay hidden.";
       } else {
         ribbon.innerHTML = state.sequence.map((c, idx) => {
           const cls = idx < state.pointer ? "dealt" : idx === state.pointer ? "next-up" : "";
@@ -1893,18 +1912,7 @@
       render();
     });
 
-    document.getElementById("btnNewDealerShoes").addEventListener("click", () => {
-      if (state.phase !== "BETTING") {
-        setBanner("Finish this hand first", "New dealer shoes can be built between hands.");
-        return;
-      }
-      state.dealerShoes = buildLeadDealerShoes();
-      [2, 3, 4, 5, 6].forEach((n) => { state.pointers[n] = 0; });
-      if (state.activeTable !== 1) activateTableShoe();
-      setBanner("Five new dealer shoes ready", "Tables 2–6 each have a new 416-card shoe. Table 1 is unchanged.");
-      savePlayerState();
-      render();
-    });
+    document.getElementById("btnSyncCasino").addEventListener("click", () => loadCasinoShoes(false));
 
     document.querySelectorAll(".table-pick").forEach((btn) => {
       btn.addEventListener("click", () => selectTable(btn.dataset.table));
@@ -1928,7 +1936,7 @@
       state.pointers[1] = 0;
       state.activeTable = 1;
       activateTableShoe();
-      state.sourceLabel = `Table 1 · Pasted sequence (${parsed.length})`;
+      state.sourceLabel = `Blackjack Live Table · pasted (${parsed.length})`;
       state.phase = "BETTING";
       state.dealerCards = [];
       state.playerHands = [];
@@ -1954,7 +1962,7 @@
           state.pointers[1] = 0;
           state.activeTable = 1;
           activateTableShoe();
-          state.sourceLabel = `Table 1 · Imported JSON (${file.name})`;
+          state.sourceLabel = `Blackjack Live Table · ${file.name}`;
           state.phase = "BETTING";
           state.dealerCards = [];
           state.playerHands = [];
@@ -1977,14 +1985,15 @@
 
     // Real-time cross-tab sync listeners
     window.addEventListener("storage", (e) => {
-      if (e.key === BACKEND_STORAGE_KEY) {
-        loadFromBackendStorage(true);
-      }
+      if (e.key === BACKEND_STORAGE_KEY) loadFromBackendStorage(true);
+      if (e.key === CASINO_STORAGE_KEY) loadCasinoShoes(true);
     });
 
     if (syncChannel) {
-      syncChannel.onmessage = () => {
-        loadFromBackendStorage(true);
+      syncChannel.onmessage = (event) => {
+        const data = event.data || {};
+        if (data.type === "casino") loadCasinoShoes(true);
+        else loadFromBackendStorage(true);
       };
     }
 
