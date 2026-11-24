@@ -1,3 +1,14 @@
 {
-  "rootDirectory": "player"
+  "rewrites": [
+    { "source": "/", "destination": "/backend/index.html" },
+    { "source": "/player-simulation.html", "destination": "/backend/player-simulation.html" },
+    { "source": "/mechanic-tables.html", "destination": "/backend/mechanic-tables.html" }
+  ],
+  "redirects": [
+    {
+      "source": "/blackjack-prediction-lab.html",
+      "destination": "/",
+      "permanent": false
+    }
+  ]
 }
