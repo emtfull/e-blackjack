@@ -121,6 +121,23 @@
       color: #fecaca;
     }
 
+    a.lab-link {
+      display: inline-flex;
+      align-items: center;
+      background: #0284c7;
+      border: 1px solid #38bdf8;
+      color: #ffffff;
+      border-radius: 8px;
+      padding: 8px 12px;
+      font-size: 0.85rem;
+      font-weight: 600;
+      text-decoration: none;
+    }
+
+    a.lab-link:hover {
+      background: #0369a1;
+    }
+
     .grid-main {
       display: grid;
       grid-template-columns: minmax(0, 1.15fr) minmax(0, 0.85fr);
@@ -479,6 +496,7 @@
         <button id="btnExportJson">Export JSON</button>
         <button id="btnExportCsv">Export CSV</button>
         <button id="btnImportJson">Import JSON</button>
+        <a class="lab-link" href="/blackjack-player-table.html">Player Table</a>
         <input type="file" id="fileImport" accept=".json" style="display:none" />
       </div>
     </header>
@@ -1125,9 +1143,15 @@ function predictNextCard(state) {
       render();
     }
 
+    let shoeChannel = null;
+    try {
+      shoeChannel = new BroadcastChannel("bj_shoe_sync");
+    } catch (_) {}
+
     function saveState() {
       try {
         localStorage.setItem(STORAGE_KEY, JSON.stringify(appState));
+        if (shoeChannel) shoeChannel.postMessage({ type: "shoe", count: appState.history.length });
       } catch (_) {}
     }
 
