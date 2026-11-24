@@ -58,6 +58,7 @@
     }
     input { font-weight: 400; cursor: text; }
     button.primary { background: #0369a1; border-color: #38bdf8; }
+    button:disabled { opacity: 0.6; cursor: wait; }
     .status {
       margin: 0 0 16px;
       color: var(--muted);
@@ -82,17 +83,14 @@
     .card { padding: 14px 16px; min-width: 0; }
     .card h2 { margin: 0 0 4px; font-size: 1rem; }
     .meta { color: var(--muted); font-size: 0.8rem; margin-bottom: 10px; }
-    .preview {
+    .audit {
       font-family: var(--mono);
       font-size: 0.78rem;
-      white-space: nowrap;
-      overflow-x: auto;
       padding: 8px 10px;
       background: var(--panel-2);
       border-radius: 8px;
       margin-bottom: 10px;
     }
-    .red { color: var(--red-suit); }
   </style>
 </head>
 <body>
@@ -100,7 +98,7 @@
     <header>
       <div>
         <h1>e Blackjack</h1>
-        <p>Tables 2–6. Each shoe is built by the 5-agent mechanic system — 8 decks, 416 cards. Leave the seed empty and Generate makes a new order. Blackjack Live Table stays on the prediction input.</p>
+        <p>Tables 2–6. Each shoe is an 8-deck house wash. One cut ends the shoe, the first card is burned, and a long face run is rebuilt. Blackjack Live Table stays on the prediction input.</p>
       </div>
       <div class="links">
         <a href="/">Prediction Lab</a>
@@ -111,11 +109,11 @@
 
     <div class="actions" style="margin-bottom:12px; align-items:center;">
       <label style="color:var(--muted); font-size:0.85rem; display:flex; align-items:center; gap:6px;">
-        Mechanic profile
+        House rules
         <select id="profileSelect">
-          <option value="erdnase">Erdnase — table artifice</option>
-          <option value="scott">Walter Scott — strike slug</option>
-          <option value="scarne">Scarne — protection audit</option>
+          <option value="standard">Standard shoe</option>
+          <option value="deep">Deep cut</option>
+          <option value="csm">CSM mix</option>
         </select>
       </label>
       <label style="color:var(--muted); font-size:0.85rem; display:flex; align-items:center; gap:6px;">
@@ -126,183 +124,36 @@
     </div>
     <p class="status" id="statusLine">Loading e Blackjack shoes…</p>
     <p class="note">
-      <strong>Note:</strong> Each shoe is still a legal 416-card pack from the same 5-agent chain.
-      Leave Seed empty and every Generate click mints a new seed, so the order changes.
-      Type a seed when you want that exact shoe again — the same profile and seed always
-      rebuild the identical order. The official table loads these shoes when the player
-      chooses Machine. Blackjack Live Table stays on its own sequence and is the Live choice.
+      <strong>Note:</strong> The server washes each 416-card shoe, burns the first card, and stops dealing at the cut.
+      Leave Seed empty and every Generate click builds a new shoe. Type a seed when you want that exact shoe again.
+      The card order stays off this page. The official table loads these shoes when the player chooses Machine.
+      Blackjack Live Table stays on its own sequence and is the Live choice.
     </p>
     <div class="grid" id="tableGrid"></div>
   </div>
 
   <script>
     const STORAGE_KEY = "bj_casino_tables_v1";
-    const RANKS = ["A", "2", "3", "4", "5", "6", "7", "8", "9", "10", "J", "Q", "K"];
-    const SUITS = ["♠", "♥", "♦", "♣"];
     const TABLE_NUMBERS = [2, 3, 4, 5, 6];
+    const PROFILE_LABELS = {
+      standard: "Standard shoe",
+      deep: "Deep cut",
+      csm: "CSM mix"
+    };
 
     let channel = null;
     try { channel = new BroadcastChannel("bj_shoe_sync"); } catch (_) {}
+    let building = false;
 
-    const SHOE_SIZE = 416; // 8 decks * 13 ranks * 4 suits
-    const HIGH_RANKS = ["10", "J", "Q", "K", "A"];
-
-    // --- Seeded deterministic PRNG (replaces Math.random) ---
-    // xmur3 string hash -> mulberry32 generator. Same seed => same stream.
-    function makeRng(seedStr) {
-      let h = 1779033703 ^ String(seedStr).length;
-      for (let i = 0; i < String(seedStr).length; i++) {
-        h = Math.imul(h ^ String(seedStr).charCodeAt(i), 3432918353);
-        h = (h << 13) | (h >>> 19);
-      }
-      let a = h >>> 0;
-      return function () {
-        a |= 0; a = (a + 0x6D2B79F5) | 0;
-        let t = Math.imul(a ^ (a >>> 15), 1 | a);
-        t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
-        return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-      };
-    }
-
-    // Fresh ordered 416-card pack: 8 decks in new-deck order.
-    function buildOrderedPack() {
-      const cards = [];
-      for (let deck = 0; deck < 8; deck++) {
-        for (const rank of RANKS) {
-          for (const suit of SUITS) cards.push(rank + suit);
-        }
-      }
-      return cards;
-    }
-
-    function rankOf(code) {
-      return code.length === 3 ? "10" : code.slice(0, 1);
-    }
-
-    // --- Agent 1: Dealer-side mechanic (false riffle + slug cluster) ---
-    // Deterministic riffle passes, then pull the high-card slug into a kept block.
-    function dealerMechanic(cards, rng, cfg) {
-      let deck = cards.slice();
-      for (let p = 0; p < cfg.passes; p++) {
-        const mid = Math.floor(deck.length / 2);
-        const left = deck.slice(0, mid);
-        const right = deck.slice(mid);
-        const out = [];
-        let i = 0, j = 0;
-        while (i < left.length || j < right.length) {
-          const takeLeft = rng() < 0.5;
-          if ((takeLeft && i < left.length) || j >= right.length) out.push(left[i++]);
-          else out.push(right[j++]);
-        }
-        deck = out;
-      }
-      return clusterSlug(deck, cfg.slugRanks, rng);
-    }
-
-    // Pull every slug-ranked card into one contiguous block at a seeded offset.
-    function clusterSlug(cards, slugRanks, rng) {
-      const slug = [];
-      const rest = [];
-      cards.forEach((code) => {
-        if (slugRanks.includes(rankOf(code))) slug.push(code);
-        else rest.push(code);
-      });
-      const offset = Math.floor(rng() * (rest.length + 1));
-      return rest.slice(0, offset).concat(slug, rest.slice(offset));
-    }
-
-    // --- Agent 2: Player-side mechanic (mucking / holdout swaps) ---
-    // Deterministic index swaps every `switchEvery` positions. Swaps preserve the multiset.
-    function playerMechanic(cards, rng, cfg) {
-      const deck = cards.slice();
-      for (let k = cfg.switchEvery; k < deck.length; k += cfg.switchEvery) {
-        const target = k + 1 + Math.floor(rng() * 3);
-        if (target < deck.length) {
-          const tmp = deck[k];
-          deck[k] = deck[target];
-          deck[target] = tmp;
-        }
-      }
-      return deck;
-    }
-
-    // --- Agent 3: Game protection (cut card + optional CSM re-insertion) ---
-    function gameProtection(cards, rng, cfg) {
-      let deck = cards.slice();
-      const cut = Math.floor(cfg.cutDepth * deck.length);
-      deck = deck.slice(cut).concat(deck.slice(0, cut)); // cut-card rotation
-      if (cfg.csm) deck = csmReinsert(deck, rng); // continuous-shuffler style re-insertion
-      return deck;
-    }
-
-    // Pull a seeded fraction of cards and re-insert them at seeded positions.
-    function csmReinsert(cards, rng) {
-      const deck = cards.slice();
-      const moves = Math.floor(deck.length / 8);
-      for (let m = 0; m < moves; m++) {
-        const from = Math.floor(rng() * deck.length);
-        const [card] = deck.splice(from, 1);
-        const to = Math.floor(rng() * (deck.length + 1));
-        deck.splice(to, 0, card);
-      }
-      return deck;
-    }
-
-    // --- Agent 4: Historian (canon profile params + seed, no card moves) ---
-    const PROFILES = {
-      erdnase: { passes: 3, slugRanks: ["10", "J", "Q", "K", "A"], switchEvery: 17, cutDepth: 0.72, csm: false },
-      scott:   { passes: 2, slugRanks: ["10", "A"],                switchEvery: 11, cutDepth: 0.66, csm: false },
-      scarne:  { passes: 4, slugRanks: ["10", "J", "Q", "K"],      switchEvery: 23, cutDepth: 0.80, csm: true },
-    };
-
-    function freshSeed() {
-      const bytes = new Uint32Array(2);
-      if (window.crypto && crypto.getRandomValues) crypto.getRandomValues(bytes);
-      else {
-        bytes[0] = Math.floor(Math.random() * 4294967296);
-        bytes[1] = Date.now() >>> 0;
-      }
-      return `deal-${Date.now().toString(36)}-${(bytes[0] >>> 0).toString(36)}${(bytes[1] >>> 0).toString(36)}`;
-    }
-
-    function historian(tableNumber, profileName, seedOverride) {
-      const name = PROFILES[profileName] ? profileName : "erdnase";
-      const base = PROFILES[name];
-      const seed = (seedOverride && String(seedOverride).trim())
-        ? `${String(seedOverride).trim()}:table${tableNumber}`
-        : `${name}:table${tableNumber}`;
-      return { ...base, seed };
-    }
-
-    // --- Agent 5: Developer / orchestrator ---
-    function buildMechanicShoe(tableNumber, profileName, seedOverride) {
-      const cfg = historian(tableNumber, profileName, seedOverride);
-      const rng = makeRng(cfg.seed);
-      let deck = buildOrderedPack();
-      deck = dealerMechanic(deck, rng, cfg);
-      deck = playerMechanic(deck, rng, cfg);
-      deck = gameProtection(deck, rng, cfg);
-      assertLegalShoe(deck);
-      return { deck, seed: cfg.seed };
-    }
-
-    // Guarantee a legal shoe: 416 cards, exactly 8 of every one of the 52 cards.
-    function assertLegalShoe(deck) {
-      if (!Array.isArray(deck) || deck.length !== SHOE_SIZE) {
-        throw new Error(`Illegal shoe: expected ${SHOE_SIZE} cards, got ${deck && deck.length}`);
-      }
-      const counts = {};
-      deck.forEach((code) => { counts[code] = (counts[code] || 0) + 1; });
-      const codes = Object.keys(counts);
-      if (codes.length !== 52 || codes.some((code) => counts[code] !== 8)) {
-        throw new Error("Illegal shoe: multiset is not exactly 8 of every card");
-      }
-      return deck;
+    function sourcesUrl() {
+      const host = location.hostname;
+      if (host === "localhost" || host === "127.0.0.1") return "/api/sources";
+      return "https://ebj-delta.vercel.app/api/sources";
     }
 
     function currentProfile() {
       const el = document.getElementById("profileSelect");
-      return el ? el.value : "erdnase";
+      return el && el.value ? el.value : "standard";
     }
 
     function currentSeed() {
@@ -318,113 +169,128 @@
       try {
         const parsed = JSON.parse(localStorage.getItem(STORAGE_KEY) || "null");
         const tables = (parsed && parsed.tables) || {};
-        const seeds = (parsed && parsed.seeds) || {};
+        const meta = (parsed && parsed.meta) || {};
         const next = emptyTables();
-        const nextSeeds = {};
+        const nextMeta = {};
         let complete = true;
         TABLE_NUMBERS.forEach((n) => {
           const shoe = tables[n] || tables[String(n)];
-          if (Array.isArray(shoe) && shoe.length === 416) next[String(n)] = shoe.slice();
-          else complete = false;
-          const seed = seeds[n] || seeds[String(n)];
-          if (seed) nextSeeds[String(n)] = String(seed);
+          const info = meta[n] || meta[String(n)];
+          const ready = Array.isArray(shoe) && shoe.length === 416 && info && info.dealUntil;
+          if (!ready) complete = false;
+          else {
+            next[String(n)] = shoe.slice();
+            nextMeta[String(n)] = info;
+          }
         });
-        return { tables: next, seeds: nextSeeds, complete };
+        return { tables: next, meta: nextMeta, complete, updatedAt: parsed && parsed.updatedAt };
       } catch (_) {
-        return { tables: emptyTables(), seeds: {}, complete: false };
+        return { tables: emptyTables(), meta: {}, complete: false, updatedAt: null };
       }
     }
 
-    function sourcesUrl() {
-      const host = location.hostname;
-      if (host === "localhost" || host === "127.0.0.1") return "/api/sources";
-      return "https://ebj-delta.vercel.app/api/sources";
+    function saveStore(tables, meta, updatedAt) {
+      const payload = { tables, meta: meta || {}, updatedAt: updatedAt || new Date().toISOString() };
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(payload));
+      if (channel) channel.postMessage({ type: "casino", count: 5 });
+      return payload;
     }
 
     function publishSources(partial) {
-      try {
-        fetch(sourcesUrl(), {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(partial)
-        }).catch(() => {});
-      } catch (_) {}
+      return fetch(sourcesUrl(), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(partial)
+      }).then((response) => response.json());
     }
 
-    function saveStore(tables, seeds) {
-      const updatedAt = new Date().toISOString();
-      const payload = { tables, seeds: seeds || {}, updatedAt };
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(payload));
-      if (channel) channel.postMessage({ type: "casino", count: 5 });
-      publishSources({ machine: { tables, updatedAt } });
+    function setBusy(busy) {
+      building = busy;
+      document.getElementById("btnBuildAll").disabled = busy;
+      document.querySelectorAll("[data-regenerate]").forEach((button) => {
+        button.disabled = busy;
+      });
     }
 
-    function paintCard(code) {
-      const red = code.endsWith("♥") || code.endsWith("♦");
-      return `<span class="${red ? "red" : ""}">${code}</span>`;
+    function auditLine(info) {
+      if (!info || !info.dealUntil) return "No house shoe yet";
+      const pct = Math.round((info.dealUntil / 416) * 100);
+      const label = PROFILE_LABELS[info.profile] || info.profile || "House shoe";
+      const face = Number.isFinite(info.longestFaceRun) ? info.longestFaceRun : "—";
+      return `${label} · ${pct}% cut · burn ${info.burn || 1} · longest face run ${face}`;
     }
 
     function render() {
-      const { tables, seeds, complete } = readStore();
+      const { tables, meta, complete } = readStore();
       const grid = document.getElementById("tableGrid");
       document.getElementById("statusLine").textContent = complete
-        ? "e Blackjack 2–6 each have a 416-card mechanic shoe. Leave the seed empty and Generate makes a new order."
-        : "Build the five shoes. Each one is a 416-card mechanic shoe, eight of every rank and suit.";
+        ? "e Blackjack 2–6 each have a house shoe. The cut ends the deal. Leave the seed empty and Generate builds a new one."
+        : "Build the five shoes. Each one is a washed 416-card shoe with a burn and a cut.";
       grid.innerHTML = TABLE_NUMBERS.map((n) => {
         const shoe = tables[String(n)] || [];
-        const seed = seeds[String(n)] || "";
-        const preview = shoe.length
-          ? shoe.slice(0, 18).map(paintCard).join(" ")
-          : "No shoe yet";
+        const info = meta[String(n)];
+        const ready = shoe.length === 416 && info && info.dealUntil;
         return `
           <article class="card">
             <h2>e Blackjack ${n}</h2>
-            <div class="meta">${shoe.length ? shoe.length + " / 416 cards" : "Empty"}${seed ? " · " + seed : ""}</div>
-            <div class="preview">${preview}</div>
-            <button type="button" data-regenerate="${n}">Generate new shoe</button>
+            <div class="meta">${ready ? "416 cards · dealing stops at the cut" : "Empty"}</div>
+            <div class="audit">${auditLine(info)}</div>
+            <button type="button" data-regenerate="${n}" ${building ? "disabled" : ""}>Generate new shoe</button>
           </article>`;
       }).join("");
     }
 
-    function buildAllTables(profile, seed) {
-      const tables = emptyTables();
-      const seeds = {};
-      const shared = (seed && String(seed).trim()) ? String(seed).trim() : freshSeed();
-      TABLE_NUMBERS.forEach((n) => {
-        const built = buildMechanicShoe(n, profile, shared);
-        tables[String(n)] = built.deck;
-        seeds[String(n)] = built.seed;
+    function mergeBuilt(payload) {
+      const stored = readStore();
+      const tables = stored.tables;
+      const meta = stored.meta;
+      Object.keys(payload.tables || {}).forEach((key) => {
+        if (Array.isArray(payload.tables[key]) && payload.tables[key].length === 416) {
+          tables[key] = payload.tables[key];
+        }
+        if (payload.meta && payload.meta[key]) meta[key] = payload.meta[key];
       });
-      return { tables, seeds };
+      saveStore(tables, meta, new Date().toISOString());
+    }
+
+    async function buildTables(tables) {
+      setBusy(true);
+      document.getElementById("statusLine").textContent = "Washing the shoe…";
+      try {
+        const payload = await publishSources({
+          build: { profile: currentProfile(), seed: currentSeed(), tables }
+        });
+        if (!payload || !payload.ok) throw new Error((payload && payload.error) || "Build failed");
+        mergeBuilt(payload);
+      } catch (error) {
+        building = false;
+        render();
+        document.getElementById("statusLine").textContent = "The shoe did not build. " + (error && error.message ? error.message : "Try again.");
+        return;
+      }
+      building = false;
+      render();
     }
 
     document.getElementById("btnBuildAll").addEventListener("click", () => {
-      const built = buildAllTables(currentProfile(), currentSeed());
-      saveStore(built.tables, built.seeds);
-      render();
+      if (!building) buildTables(TABLE_NUMBERS);
     });
 
     document.getElementById("tableGrid").addEventListener("click", (event) => {
       const button = event.target.closest("[data-regenerate]");
-      if (!button) return;
-      const n = Number(button.dataset.regenerate);
-      const stored = readStore();
-      const typed = currentSeed().trim();
-      const built = buildMechanicShoe(n, currentProfile(), typed || freshSeed());
-      stored.tables[String(n)] = built.deck;
-      stored.seeds[String(n)] = built.seed;
-      saveStore(stored.tables, stored.seeds);
-      render();
+      if (!button || building) return;
+      buildTables([Number(button.dataset.regenerate)]);
     });
 
     const initial = readStore();
-    if (!initial.complete) {
-      const built = buildAllTables(currentProfile(), currentSeed());
-      saveStore(built.tables, built.seeds);
-    } else {
-      publishSources({ machine: { tables: initial.tables, updatedAt: new Date().toISOString() } });
-    }
     render();
+    if (!initial.complete) {
+      buildTables(TABLE_NUMBERS);
+    } else {
+      publishSources({
+        machine: { tables: initial.tables, meta: initial.meta, updatedAt: initial.updatedAt || new Date().toISOString() }
+      }).catch(() => {});
+    }
   </script>
 </body>
 </html>

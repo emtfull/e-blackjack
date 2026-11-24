@@ -722,7 +722,7 @@
         <a href="/mechanic-tables.html" class="nav-back" title="e Blackjack backend for tables 2–6">e Blackjack</a>
         <div>
           <h1>Blackjack Live Table</h1>
-          <p>Blackjack Live Table follows the prediction input, however many cards were entered. e Blackjack 2–6 each play a full 416-card shoe.</p>
+          <p>Blackjack Live Table follows the prediction input, however many cards were entered. e Blackjack 2–6 deal a washed shoe and stop at the cut.</p>
         </div>
       </div>
 
@@ -941,6 +941,9 @@
       labSequence: [],
       pointers: { 1: 0, 2: 0, 3: 0, 4: 0, 5: 0, 6: 0 },
       dealerShoes: null,
+      shoeMeta: {},
+      dealUntil: 0,
+      burn: 0,
 
       // Active round state
       phase: "BETTING", // BETTING | INSURANCE | PLAYER_TURN | SETTLED
@@ -1034,22 +1037,40 @@
       return sorted === "6-7-8";
     }
 
-    function readCasinoShoes() {
+    function readCasinoStore() {
       try {
         const raw = localStorage.getItem(CASINO_STORAGE_KEY);
         if (!raw) return null;
         const parsed = JSON.parse(raw);
         const tables = parsed.tables || {};
+        const meta = parsed.meta || {};
         const shoes = [2, 3, 4, 5, 6].map((n) => tables[n] || tables[String(n)]);
-        if (shoes.every((shoe) => Array.isArray(shoe) && shoe.length === 416)) return shoes;
+        if (!shoes.every((shoe) => Array.isArray(shoe) && shoe.length === 416)) return null;
+        const limits = {};
+        [2, 3, 4, 5, 6].forEach((n, index) => {
+          const info = meta[n] || meta[String(n)] || {};
+          const dealUntil = Number(info.dealUntil) || shoes[index].length;
+          const burn = Number(info.burn) || 0;
+          limits[n] = {
+            burn: burn > 0 && burn < dealUntil ? burn : 0,
+            dealUntil
+          };
+        });
+        return { shoes, limits };
       } catch (_) {}
       return null;
     }
 
+    function readCasinoShoes() {
+      const stored = readCasinoStore();
+      return stored ? stored.shoes : null;
+    }
+
     function ensureDealerShoes() {
-      const fromCasino = readCasinoShoes();
-      if (fromCasino) {
-        state.dealerShoes = fromCasino;
+      const stored = readCasinoStore();
+      if (stored) {
+        state.dealerShoes = stored.shoes;
+        state.shoeMeta = stored.limits;
         return;
       }
       const shoes = state.dealerShoes;
@@ -1058,7 +1079,9 @@
     }
 
     function loadCasinoShoes(silent = false) {
-      const shoes = readCasinoShoes();
+      const stored = readCasinoStore();
+      const shoes = stored && stored.shoes;
+      if (stored) state.shoeMeta = stored.limits;
       if (!shoes) {
         if (!silent) setBanner("e Blackjack has no shoes yet", "Open e Blackjack and build the five 416-card shoes.");
         return false;
@@ -1095,11 +1118,18 @@
         return;
       }
       const shoe = (state.dealerShoes && state.dealerShoes[state.activeTable - 2]) || [];
+      const limit = (state.shoeMeta && state.shoeMeta[state.activeTable]) || { burn: 0, dealUntil: shoe.length };
       state.sequence = shoe.slice();
-      state.pointer = state.pointers[state.activeTable] || 0;
-      if (state.pointer > state.sequence.length) state.pointer = 0;
+      state.burn = limit.burn || 0;
+      state.dealUntil = limit.dealUntil || shoe.length;
+      let pointer = state.pointers[state.activeTable] || 0;
+      if (pointer < state.burn) pointer = state.burn;
+      if (pointer > state.dealUntil) pointer = state.dealUntil;
+      state.pointer = pointer;
+      state.pointers[state.activeTable] = pointer;
+      const playable = Math.max(0, state.dealUntil - state.burn);
       state.sourceLabel = shoe.length === 416
-        ? `e Blackjack ${state.activeTable} · 416`
+        ? `e Blackjack ${state.activeTable} · ${playable} to the cut`
         : `e Blackjack ${state.activeTable} · waiting for shoes`;
     }
 
@@ -1161,11 +1191,15 @@
     }
 
     function cardsRemainingInShoe() {
+      if (state.activeTable !== 1 && state.dealUntil) {
+        return Math.max(0, state.dealUntil - state.pointer);
+      }
       return Math.max(0, state.sequence.length - state.pointer);
     }
 
     function drawNextCard() {
-      if (state.pointer >= state.sequence.length) {
+      const stop = state.activeTable !== 1 && state.dealUntil ? state.dealUntil : state.sequence.length;
+      if (state.pointer >= stop || state.pointer >= state.sequence.length) {
         return null;
       }
       const card = state.sequence[state.pointer];
@@ -1280,7 +1314,11 @@
       }
 
       if (cardsRemainingInShoe() < 4) {
-        setBanner("End of Backend Sequence Reached", "Click 'Restart Shoe #1' or sync more dealt cards from Backend Lab.");
+        if (state.activeTable !== 1) {
+          setBanner("Cut card reached", "This hand would pass the cut. Open e Blackjack and generate a new shoe.");
+        } else {
+          setBanner("End of Backend Sequence Reached", "Click 'Restart Shoe #1' or sync more dealt cards from Backend Lab.");
+        }
         return;
       }
 

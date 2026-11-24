@@ -14,6 +14,8 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
+from lib.shoe import TABLES, build_shoe, normalize_profile
+
 SOURCES_STORE = Path("/tmp/ebj-sources.json")
 SOURCES_KEY = "ebj:sources"
 ROOM_KEY = "ebj:room:{}"
@@ -266,6 +268,8 @@ def new_room(room_id):
         "feedIndex": 0,
         "feedSig": "",
         "pendingFeed": None,
+        "burn": 0,
+        "dealUntil": 0,
         "version": 1,
         "deadline": 0,
         "timerKind": "",
@@ -357,15 +361,126 @@ def handle_sources_get():
     return read_sources()
 
 
+def _now():
+    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+
+
+def machine_bucket(current):
+    machine = current.get("machine")
+    if not isinstance(machine, dict):
+        machine = {}
+        current["machine"] = machine
+    if not isinstance(machine.get("tables"), dict):
+        machine["tables"] = {}
+    if not isinstance(machine.get("meta"), dict):
+        machine["meta"] = {}
+    return machine
+
+
+def store_built_shoes(built):
+    """Merge built table shoes into the source store. built maps table number to build_shoe()."""
+    current = read_sources()
+    machine = machine_bucket(current)
+    tables_out = {}
+    meta_out = {}
+    for number, shoe in built.items():
+        key = str(number)
+        machine["tables"][key] = list(shoe["cards"])
+        machine["meta"][key] = dict(shoe["meta"])
+        tables_out[key] = machine["tables"][key]
+        meta_out[key] = machine["meta"][key]
+    machine["updatedAt"] = _now()
+    write_sources(current)
+    return tables_out, meta_out
+
+
+def parse_build_tables(raw):
+    numbers = []
+    if not isinstance(raw, list) or not raw:
+        raw = list(TABLES)
+    for item in raw:
+        try:
+            number = int(item)
+        except (TypeError, ValueError):
+            continue
+        if number in TABLES and number not in numbers:
+            numbers.append(number)
+    return numbers
+
+
+def build_and_store(build):
+    profile = normalize_profile(build.get("profile"))
+    seed = build.get("seed") or ""
+    numbers = parse_build_tables(build.get("tables"))
+    if not numbers:
+        return {"ok": False, "error": "No table to build."}
+    built = {}
+    for number in numbers:
+        built[number] = build_shoe(number, profile, seed)
+    tables_out, meta_out = store_built_shoes(built)
+    return {"ok": True, "tables": tables_out, "meta": meta_out}
+
+
 def handle_sources_post(body):
     if not isinstance(body, dict):
         return {"ok": False, "error": "Bad body."}
+    if isinstance(body.get("build"), dict):
+        return build_and_store(body["build"])
     current = read_sources()
     for key in ("machine", "player", "lab"):
         if isinstance(body.get(key), dict):
             current[key] = body[key]
     write_sources(current)
     return {"ok": True}
+
+
+def meta_for_table(table):
+    data = read_sources()
+    meta = ((data.get("machine") or {}).get("meta") or {})
+    info = meta.get(str(table)) or meta.get(table) or {}
+    return info if isinstance(info, dict) else {}
+
+
+def limits_for_room(room):
+    """Burn index and the first index that is not dealt. Live shoes have no cut."""
+    if room.get("id") == "live":
+        return 0, len(room.get("feed") or [])
+    table = str(room.get("id", "")).split("-", 1)[-1]
+    info = meta_for_table(table)
+    burn = int(info.get("burn") or 0)
+    deal_until = info.get("dealUntil")
+    if deal_until is None:
+        deal_until = len(room.get("feed") or [])
+    else:
+        deal_until = int(deal_until)
+    return burn, deal_until
+
+
+def apply_limits(room):
+    burn, deal_until = limits_for_room(room)
+    room["burn"] = burn
+    room["dealUntil"] = deal_until
+    if room.get("phase") in ("betting", "settled") and room.get("feedIndex", 0) < burn:
+        room["feedIndex"] = burn
+
+
+def profile_for_table(table):
+    return normalize_profile(meta_for_table(table).get("profile"))
+
+
+def open_machine_shoe(room, needed):
+    """Skip the burn. When the next hand would pass the cut, build a new shoe first."""
+    apply_limits(room)
+    deal_until = room.get("dealUntil") or 0
+    if room.get("feed") and room["feedIndex"] + needed <= deal_until:
+        return True
+    if hand_in_progress(room):
+        return False
+    table = int(str(room["id"]).split("-", 1)[1])
+    shoe = build_shoe(table, profile_for_table(table), "")
+    store_built_shoes({table: shoe})
+    commit_feed(room, shoe["cards"])
+    return room["feedIndex"] + needed <= (room.get("dealUntil") or 0)
 
 
 def say(room, main, sub=""):
@@ -456,7 +571,8 @@ def banker_deal(room):
 
 
 def cards_left(room):
-    return max(0, len(room["feed"]) - room["feedIndex"])
+    deal_until = room.get("dealUntil") or len(room.get("feed") or [])
+    return max(0, deal_until - room.get("feedIndex", 0))
 
 
 def draw(room):
@@ -469,7 +585,11 @@ def draw(room):
 
 def commit_feed(room, cards):
     old = room["feed"]
-    extended = len(old) > 0 and len(cards) >= len(old) and all(old[i] == c for i, c in enumerate(old))
+    extended = (
+        len(old) > 0
+        and len(cards) >= len(old)
+        and all(old[i] == cards[i] for i in range(len(old)))
+    )
     room["feed"] = list(cards)
     room["feedSig"] = "|".join(cards)
     if not extended:
@@ -477,12 +597,15 @@ def commit_feed(room, cards):
     else:
         room["feedIndex"] = min(room["feedIndex"], len(cards))
     room["pendingFeed"] = None
+    apply_limits(room)
 
 
 def sync_feed(room):
     cards = feed_for_room(room["id"])
     sig = "|".join(cards)
     if sig == room["feedSig"]:
+        if cards:
+            apply_limits(room)
         return
     if hand_in_progress(room) and room["feed"]:
         room["pendingFeed"] = cards
@@ -565,7 +688,11 @@ def deal_round(room):
         return
     flush_pending_feed(room)
     needed = len(players) * 2 + 2
-    if cards_left(room) < needed:
+    if room["id"] != "live":
+        if not open_machine_shoe(room, needed):
+            say(room, "Shoe is at the cut", "The next shoe could not be built. Generate one on e Blackjack.")
+            return
+    elif cards_left(room) < needed:
         say(room, source_headline(room) + " is short",
             f"Only {cards_left(room)} cards left, and this hand needs {needed}.")
         return
