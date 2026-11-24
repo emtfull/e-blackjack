@@ -1,0 +1,13 @@
+---
+description: Always commit finished work and push to GitHub remotes
+alwaysApply: true
+---
+
+# Always commit and push
+
+When a task produces code or config changes, finish by committing and pushing without waiting to be asked again.
+
+- Commit with a short why-focused message.
+- Push `main` to `origin` (`https://github.com/emtfull/blackjack-prediction-lab`).
+- Also push the same work to `https://github.com/emtfull/e-blackjack` `main` when the official table / player / multiplayer work changed.
+- Do not skip hooks or force-push unless the user explicitly asks.
