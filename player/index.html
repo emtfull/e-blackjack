@@ -77,6 +77,14 @@
       background: var(--glass); border: 1px solid var(--gold-soft);
     }
     .balance .bank { color: var(--gold); }
+    .mode-pill {
+      padding: 5px 12px; border-radius: 10px; font-size: 12px; font-weight: 800;
+      letter-spacing: 0.04em; text-transform: uppercase;
+      background: var(--glass); border: 1px solid var(--gold-soft); color: #fff8ec;
+    }
+    .mode-pill.watch { color: #d6c4a4; }
+    .mode-pill.solo { color: var(--gold); }
+    .mode-pill.multi { color: #9fe870; border-color: rgba(159, 232, 112, 0.45); }
     .load-source {
       width: 236px; padding: 8px 10px 9px; border-radius: 12px; text-align: left;
       background: var(--glass); border: 1px solid var(--gold-soft);
@@ -453,6 +461,7 @@
               <button type="button" class="iconbtn" id="btnRules" aria-label="Table rules">i</button>
             </div>
             <div class="balance" id="balancePill"></div>
+            <div class="mode-pill watch" id="modePill">Watching</div>
             <div class="load-source" id="loadSource">
               <span class="load-kicker" id="loadKicker">Loaded from machine</span>
               <div class="load-toggle" id="loadToggle" role="group" aria-label="Choose live or machine cards">
@@ -509,7 +518,7 @@
   <div class="overlay" id="joinMask">
     <form class="modal" id="joinForm">
       <h2 id="joinTitle">Take a seat</h2>
-      <p>Buy in $2,500. Up to five players. Only seats with a bet play this hand.</p>
+      <p>Watchers stay guests until they sit. Alone is single player. Sitting with others joins the same hand. Buy in $2,500.</p>
       <div class="avatar-pick" id="avatarPick" role="radiogroup" aria-label="Choose your avatar"></div>
       <input id="joinName" maxlength="16" placeholder="Your name at the table" required autocomplete="nickname" />
       <div class="row">
@@ -531,6 +540,7 @@
         <li>Suited 6-7-8 or suited 7-7-7 pays 3 to 1</li>
         <li>Double on any first two cards, split once</li>
         <li>Live deals the Blackjack Live Table sequence. Machine deals the e Blackjack shoe set on the mechanic page.</li>
+        <li>Open the page to watch. Tap Sit only if you want to play. Alone is single player; more seated players share the table.</li>
       </ul>
       <p>Shortcuts: H hit, S stand, D double, P split, Space deal / next round, 1-4 chips.</p>
       <div class="row"><button class="btn primary" type="button" id="rulesClose">Back to the table</button></div>
@@ -637,6 +647,57 @@
     }
 
     function seatedCount() { return state.seats.filter((seat) => seat.occupied).length; }
+    function iAmSeated() { return state.mySeat >= 0; }
+    function playMode() {
+      const seated = seatedCount();
+      if (!iAmSeated()) return seated ? "watch-live" : "watch";
+      if (seated <= 1) return "solo";
+      return "multi";
+    }
+    function modeCopy() {
+      const seated = seatedCount();
+      const mode = playMode();
+      if (mode === "watch") {
+        return {
+          pill: "Watching",
+          pillClass: "watch",
+          profile: "Watching",
+          tip: "Sit only if you want to play",
+          banner: "You are watching",
+          sub: "The table is open. Tap Sit on an empty seat to play alone, or watch while others sit."
+        };
+      }
+      if (mode === "watch-live") {
+        return {
+          pill: seated === 1 ? "Watching · 1 player" : `Watching · ${seated} players`,
+          pillClass: "watch",
+          profile: "Watching",
+          tip: "Sit to join this table",
+          banner: "You are watching",
+          sub: seated === 1
+            ? "One player is at the table. Sit in an open seat to make it multiplayer, or keep watching."
+            : `${seated} players are sharing this table. Sit in an open seat to join, or keep watching.`
+        };
+      }
+      if (mode === "solo") {
+        return {
+          pill: "Single player",
+          pillClass: "solo",
+          profile: `Seat ${state.mySeat + 1}`,
+          tip: "Playing alone",
+          banner: "Playing alone",
+          sub: "This is your single-player table until someone else sits down."
+        };
+      }
+      return {
+        pill: `Multiplayer · ${seated}`,
+        pillClass: "multi",
+        profile: `Seat ${state.mySeat + 1}`,
+        tip: `${seated} players at the table`,
+        banner: "Multiplayer table",
+        sub: "Everyone who sat down shares this same hand."
+      };
+    }
 
     function bettingSeats() {
       const indexes = [];
@@ -801,7 +862,7 @@
       lastRenderVersion = -1;
       flashNote(
         mode === "machine" ? `Switched to e Blackjack ${state.machineTable}` : "Switched to the live table",
-        "Sit down to join this table. Players who pick this source play together."
+        "You are watching this table. Sit only if you want to play."
       );
       await getState();
     }
@@ -914,7 +975,9 @@
         const total = state.holeHidden ? handValue([state.dealer[0]]) : handValue(state.dealer);
         dealerRow = `<div class="mh-hand"><div class="cards-row">${state.dealer.map((c, i) => plainCardHtml(c, state.holeHidden && i === 1)).join("")}</div><span class="mh-total">${total > 21 ? "BUST" : total}</span></div>`;
       }
-      let mine = '<span class="mh-empty">Tap a circle to sit and bet</span>';
+      let mine = iAmSeated()
+        ? '<span class="mh-empty">Place a bet when you are ready</span>'
+        : '<span class="mh-empty">Watching · tap Sit only if you want to play</span>';
       if (seat && seat.occupied && seat.hands.length) {
         mine = seat.hands.map((hand, hi) => {
           const active = state.phase === "acting" && state.activeSeat === index && state.activeHand === hi;
@@ -1033,15 +1096,34 @@
       const stage = document.getElementById("stage");
       stage.classList.toggle("is-acting", state.phase === "acting");
 
+      const mode = modeCopy();
+      const modePill = document.getElementById("modePill");
+      if (modePill) {
+        modePill.className = `mode-pill ${mode.pillClass}`;
+        modePill.textContent = mode.pill;
+      }
+
       const sel = selectedSeat();
       const profile = document.getElementById("profile");
       const balance = document.getElementById("balancePill");
-      if (sel && sel.occupied) {
-        profile.innerHTML = `<img src="${avatarSrc(sel.avatar)}" alt="" /><div class="who"><b>${escapeHtml(sel.name)}</b><small>Seat ${state.selected + 1}</small><span><span class="bank" data-seat="${state.selected}">${money(bankValue(state.selected))}</span> chips</span></div>`;
-        balance.innerHTML = `Balance <span class="bank" data-seat="${state.selected}">${money(bankValue(state.selected))}</span>`;
+      if (iAmSeated()) {
+        const mine = state.seats[state.mySeat];
+        profile.innerHTML = `<img src="${avatarSrc(mine.avatar)}" alt="" /><div class="who"><b>${escapeHtml(mine.name)}</b><small>${escapeHtml(mode.profile)}</small><span><span class="bank" data-seat="${state.mySeat}">${money(bankValue(state.mySeat))}</span> chips</span></div>`;
+        balance.innerHTML = `Balance <span class="bank" data-seat="${state.mySeat}">${money(bankValue(state.mySeat))}</span>`;
+      } else if (sel && sel.occupied) {
+        profile.innerHTML = `<img src="${avatarSrc(sel.avatar)}" alt="" /><div class="who"><b>${escapeHtml(sel.name)}</b><small>${escapeHtml(mode.profile)}</small><span>${escapeHtml(mode.tip)}</span></div>`;
+        balance.innerHTML = "Watching";
       } else {
-        profile.innerHTML = `<img src="${avatarSrc(1)}" alt="" style="filter:grayscale(1) brightness(.6)" /><div class="who"><b>Guest</b><small>${seatedCount() ? "Pick a seat" : "Table open"}</small><span>Tap a circle to sit</span></div>`;
-        balance.innerHTML = "Balance —";
+        profile.innerHTML = `<img src="${avatarSrc(1)}" alt="" style="filter:grayscale(1) brightness(.6)" /><div class="who"><b>Guest</b><small>${escapeHtml(mode.profile)}</small><span>${escapeHtml(mode.tip)}</span></div>`;
+        balance.innerHTML = "Watching";
+      }
+
+      const showServerCopy = handInProgress() || Date.now() < flashUntil;
+      if (!showServerCopy && state.connected) {
+        document.getElementById("bannerMain").textContent = mode.banner;
+        document.getElementById("bannerSub").textContent = mode.sub;
+        document.querySelector("#dockMsg b").textContent = mode.banner;
+        document.querySelector("#dockMsg span").textContent = mode.sub;
       }
 
       const dealerEl = document.getElementById("dealerCards");
@@ -1060,10 +1142,12 @@
       document.getElementById("shoeCount").textContent = String(shoeCount);
       document.getElementById("infoShoe").textContent = String(shoeCount);
       paintLoadSource();
-      document.getElementById("bannerMain").textContent = state.main;
-      document.getElementById("bannerSub").textContent = state.sub;
-      document.querySelector("#dockMsg b").textContent = state.main;
-      document.querySelector("#dockMsg span").textContent = state.sub;
+      if (showServerCopy || !state.connected) {
+        document.getElementById("bannerMain").textContent = state.main;
+        document.getElementById("bannerSub").textContent = state.sub;
+        document.querySelector("#dockMsg b").textContent = state.main;
+        document.querySelector("#dockMsg span").textContent = state.sub;
+      }
 
       document.getElementById("seats").innerHTML = state.seats.map(seatHtml).join("");
 
@@ -1074,17 +1158,20 @@
     }
 
     function renderConsole() {
-      const seat = selectedSeat();
+      const seat = iAmSeated() ? state.seats[state.mySeat] : selectedSeat();
+      const watching = !iAmSeated();
       const chipTray = document.getElementById("chipTray");
-      chipTray.innerHTML = [25, 100, 500, 1000].map((value) =>
-        `<button type="button" class="chip c${value}${state.chip === value ? " selected" : ""}" data-chip="${value}" aria-label="$${value} chip"><span>${value >= 1000 ? "1K" : value}</span></button>`
-      ).join("");
+      chipTray.innerHTML = watching
+        ? ""
+        : [25, 100, 500, 1000].map((value) =>
+          `<button type="button" class="chip c${value}${state.chip === value ? " selected" : ""}" data-chip="${value}" aria-label="$${value} chip"><span>${value >= 1000 ? "1K" : value}</span></button>`
+        ).join("");
 
       const totals = seat && seat.occupied && seat.hands.length
         ? seat.hands.map((h) => handValue(h.cards)).join(" / ")
         : "—";
       document.getElementById("infoTotals").textContent = totals;
-      document.getElementById("curBet").textContent = seat && seat.occupied ? money(wager(seat)) : "$0";
+      document.getElementById("curBet").textContent = seat && seat.occupied && !watching ? money(wager(seat)) : "$0";
 
       const icons = {
         hit: '<svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>',
@@ -1104,20 +1191,28 @@
         return `<button type="button" class="rbtn ${color || ""}${o.big ? " big" : ""}${o.pulse ? " pulse" : ""}" data-act="${act}"${o.disabled ? " disabled" : ""}><span class="disc">${icon}</span>${label}</button>`;
       };
 
-      const iAmSeated = state.mySeat >= 0;
       const insuranceSeat = bettingSeats()[state.insuranceAt];
       const insuranceMine = state.phase === "insurance" && insuranceSeat !== undefined && isMine(insuranceSeat);
       const myActing = state.phase === "acting" && state.activeSeat !== null && isMine(state.activeSeat);
 
       let actions = "";
-      if (state.phase === "betting") {
+      if (watching) {
+        const seated = seatedCount();
+        actions = rbtn(
+          "wait",
+          seated ? "Watching the table" : "Watching · tap Sit to play",
+          icons.next,
+          "",
+          { disabled: true, big: true }
+        );
+      } else if (state.phase === "betting") {
         const ready = bettingSeats().length > 0;
         actions =
-          rbtn("clear", "Clear", icons.clear, "", { disabled: !iAmSeated }) +
-          rbtn("rebet", "Repeat", icons.repeat, "", { disabled: !iAmSeated }) +
+          rbtn("clear", "Clear", icons.clear, "", { disabled: false }) +
+          rbtn("rebet", "Repeat", icons.repeat, "", { disabled: false }) +
           rbtn("deal", "Deal", icons.check, "green", { big: true, disabled: !ready, pulse: ready }) +
-          rbtn("rebuy", "Rebuy", icons.plus, "gold", { disabled: !iAmSeated }) +
-          rbtn("leave", "Leave", icons.leave, "", { disabled: !iAmSeated });
+          rbtn("rebuy", "Rebuy", icons.plus, "gold", { disabled: false }) +
+          rbtn("leave", "Leave", icons.leave, "", { disabled: false });
       } else if (state.phase === "insurance") {
         if (insuranceMine) {
           actions =
@@ -1203,11 +1298,18 @@
 
     document.getElementById("dock").addEventListener("click", (event) => {
       const chip = event.target.closest("[data-chip]");
-      if (chip) { state.chip = Number(chip.dataset.chip); play("chip"); render(); return; }
+      if (chip) {
+        if (!iAmSeated()) { flashNote("You are watching", "Sit down first if you want to play."); return; }
+        state.chip = Number(chip.dataset.chip); play("chip"); render(); return;
+      }
       const act = event.target.closest("[data-act]");
       if (!act || act.disabled) return;
       const action = act.dataset.act;
-      const betTarget = state.mySeat >= 0 ? state.mySeat : state.selected;
+      if (!iAmSeated() && action !== "wait") {
+        flashNote("You are watching", "Sit at an open seat only if you want to play.");
+        return;
+      }
+      const betTarget = state.mySeat;
       if (action === "clear") sendAction("clear", { seat: betTarget });
       else if (action === "rebet") { play("chip"); sendAction("rebet", { seat: betTarget }); }
       else if (action === "rebuy") { play("chip"); sendAction("rebuy", { seat: betTarget }); }
@@ -1239,6 +1341,13 @@
       localStorage.setItem(NAME_KEY, myName);
       localStorage.setItem(AVATAR_KEY, String(myAvatar));
       document.getElementById("joinMask").classList.remove("show");
+      const others = seatedCount();
+      flashNote(
+        others ? "Joining the table" : "Playing alone",
+        others
+          ? "You sat with the players already here. This is now multiplayer."
+          : "You are the only seated player. This is single player until someone else sits."
+      );
       sendAction("sit", { seat: state.pendingSeat, name, avatar: state.pendingAvatar });
     });
 
