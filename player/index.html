@@ -544,14 +544,14 @@
     const MAX_BET = 1000;
     const RANKS = ["A", "2", "3", "4", "5", "6", "7", "8", "9", "10", "J", "Q", "K"];
     const SUITS = ["♠", "♥", "♦", "♣"];
-    const SAVE_KEY = "bj_official_table_v1";
     const SOUND_KEY = "bj_official_sound";
     const LOAD_KEY = "bj_official_load_v1";
-    const MACHINE_ORIGIN = "http://localhost:8080";
+    const ID_KEY = "bj_player_id";
+    const NAME_KEY = "bj_player_name";
+    const AVATAR_KEY = "bj_player_avatar";
     const AVATARS = 6;
     const STAGE_W = 1280, STAGE_H = 720;
     const DEALER_POINT = { x: 640, y: 320 };
-    /* Bet-circle centres on the 1280x720 stage (matches the felt in assets/scene.jpg). */
     const SEAT_POS = [
       { x: 310, y: 450 },
       { x: 480, y: 505 },
@@ -561,63 +561,59 @@
     ];
     const SEAT_COLORS = ["#e8833a", "#3b82e0", "#2fae66", "#c04bd0", "#e0b43b"];
 
+    /* ---------- identity + server ---------- */
+    const QS = new URLSearchParams(location.search);
+    const SERVER = (QS.get("server") || "").replace(/\/+$/, "") || location.origin;
+
+    function genId() {
+      return "p-" + Math.random().toString(36).slice(2, 10) + Date.now().toString(36);
+    }
+    let myId = QS.get("me") || localStorage.getItem(ID_KEY);
+    if (!myId) { myId = genId(); }
+    localStorage.setItem(ID_KEY, myId);
+    let myName = localStorage.getItem(NAME_KEY) || "";
+    let myAvatar = Number(localStorage.getItem(AVATAR_KEY)) || 1;
+
+    function emptySeat() {
+      return {
+        occupied: false, name: "", avatar: 1, bankroll: 0,
+        bet: 0, pairBet: 0, jackpotBet: 0, insurance: 0, evenMoney: false,
+        hands: [], badges: [], lastBet: 0, lastPair: 0, lastJackpot: 0, playerId: null
+      };
+    }
+
     const state = {
-      seats: [],
+      seats: Array.from({ length: SEATS }, emptySeat),
       dealer: [],
       holeHidden: true,
       phase: "betting",
-      shoe: [],
       loadMode: "machine",
       machineTable: 2,
-      liveSequence: [],
-      machineShoes: {},
-      localLive: [],
-      localMachine: {},
-      remoteLive: [],
-      remoteMachine: {},
-      feedAll: [],
-      feedIndex: 0,
-      feedKey: "",
-      queuedFeed: null,
+      shoeLeft: 0,
+      shoeLen: 0,
+      version: 0,
+      deadline: 0,
       spot: "main",
       chip: 25,
-      selected: 0,
+      selected: 2,
+      mySeat: -1,
       activeSeat: null,
       activeHand: 0,
       insuranceAt: 0,
       busy: false,
+      connected: false,
       pendingSeat: 0,
       pendingAvatar: 1,
-      main: "The table is open",
-      sub: "Sit at the table. Seats without a bet are skipped."
+      main: "Connecting to the table…",
+      sub: "Open this page from the game server address."
     };
-
-    function emptySeat() {
-      return {
-        occupied: false,
-        name: "",
-        avatar: 1,
-        bankroll: 0,
-        bet: 0,
-        pairBet: 0,
-        jackpotBet: 0,
-        insurance: 0,
-        evenMoney: false,
-        hands: [],
-        badges: [],
-        lastBet: 0,
-        lastPair: 0,
-        lastJackpot: 0
-      };
-    }
 
     function rankOf(code) { return code.startsWith("10") ? "10" : code.slice(0, -1); }
     function suitOf(code) { return code.slice(-1); }
     function isRed(code) { const s = suitOf(code); return s === "♥" || s === "♦"; }
 
     function handValue(cards) {
-      let total = 0;
-      let aces = 0;
+      let total = 0, aces = 0;
       cards.forEach((code) => {
         const rank = rankOf(code);
         if (rank === "A") { total += 11; aces += 1; }
@@ -629,8 +625,7 @@
     }
 
     function isSoft(cards) {
-      let total = 0;
-      let aces = 0;
+      let total = 0, aces = 0;
       cards.forEach((code) => {
         const rank = rankOf(code);
         if (rank === "A") { total += 11; aces += 1; }
@@ -641,76 +636,41 @@
       return aces > 0 && total <= 21;
     }
 
-    function randInt(n) {
-      const max = Math.floor(0x100000000 / n) * n;
-      const buf = new Uint32Array(1);
-      let value = 0;
-      do {
-        crypto.getRandomValues(buf);
-        value = buf[0];
-      } while (value >= max);
-      return value % n;
-    }
+    function seatedCount() { return state.seats.filter((seat) => seat.occupied).length; }
 
-    function buildShoe() {
-      const cards = [];
-      for (let deck = 0; deck < 8; deck += 1) {
-        RANKS.forEach((rank) => SUITS.forEach((suit) => cards.push(rank + suit)));
+    function bettingSeats() {
+      const indexes = [];
+      for (let i = SEATS - 1; i >= 0; i -= 1) {
+        const seat = state.seats[i];
+        if (seat.occupied && seat.bet >= MIN_BET) indexes.push(i);
       }
-      for (let i = cards.length - 1; i > 0; i -= 1) {
-        const j = randInt(i + 1);
-        const swap = cards[i];
-        cards[i] = cards[j];
-        cards[j] = swap;
+      return indexes;
+    }
+
+    function wager(seat) { return seat.bet + seat.pairBet + seat.jackpotBet; }
+    function say(main, sub) { state.main = main; state.sub = sub; }
+    function money(n) { return `$${Math.round(n).toLocaleString("en-US")}`; }
+    function escapeHtml(value) {
+      return String(value).replace(/[&<>"']/g, (ch) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "\"": "&quot;", "'": "&#39;" }[ch]));
+    }
+    function avatarSrc(n) { return `assets/avatar-${((Number(n) || 1) - 1) % AVATARS + 1}.jpg`; }
+
+    function isMine(index) {
+      const seat = state.seats[index];
+      return !!seat && seat.occupied && seat.playerId === myId;
+    }
+    function handInProgress() { return state.phase !== "betting" && state.phase !== "settled"; }
+    function cardsLeft() { return state.shoeLeft || 0; }
+    function roomId() { return state.loadMode === "live" ? "live" : `machine-${state.machineTable}`; }
+    function sourceHeadline() { return state.loadMode === "machine" ? "Loaded from machine" : "Loaded from live"; }
+    function feedDetail() {
+      const left = cardsLeft();
+      if (state.loadMode === "machine") {
+        if (!state.shoeLen) return "Machine shoes are not set yet. Build them on e Blackjack.";
+        return `e Blackjack ${state.machineTable} · ${left} of ${state.shoeLen} cards left`;
       }
-      cards.pop();
-      return cards;
-    }
-
-    function validCard(code) {
-      if (typeof code !== "string" || !code) return false;
-      const rank = code.startsWith("10") ? "10" : code.slice(0, -1);
-      const suit = code.slice(-1);
-      return RANKS.includes(rank) && SUITS.includes(suit);
-    }
-
-    function cardsFromHistory(history) {
-      if (!Array.isArray(history)) return [];
-      return history.map((row) => (typeof row === "string" ? row : row && row.code)).filter(validCard);
-    }
-
-    function chooseLiveSequence(playerSeq, labSeq) {
-      const player = Array.isArray(playerSeq) ? playerSeq.filter(validCard) : [];
-      const lab = Array.isArray(labSeq) ? labSeq.filter(validCard) : [];
-      const labExtendsPlayer = player.length > 0
-        && lab.length >= player.length
-        && player.every((card, index) => lab[index] === card);
-      if (labExtendsPlayer) return lab;
-      if (player.length) return player;
-      return lab;
-    }
-
-    function readLocalSources() {
-      const machine = {};
-      let playerSeq = [];
-      let labSeq = [];
-      try {
-        const parsed = JSON.parse(localStorage.getItem("bj_casino_tables_v1") || "null");
-        const tables = (parsed && parsed.tables) || {};
-        [2, 3, 4, 5, 6].forEach((n) => {
-          const shoe = tables[n] || tables[String(n)];
-          if (Array.isArray(shoe) && shoe.length === 416 && shoe.every(validCard)) machine[String(n)] = shoe.slice();
-        });
-      } catch (_) {}
-      try {
-        const player = JSON.parse(localStorage.getItem("bj_player_table_v1") || "null");
-        if (player && Array.isArray(player.labSequence)) playerSeq = player.labSequence;
-      } catch (_) {}
-      try {
-        const lab = JSON.parse(localStorage.getItem("bj_prediction_lab_v1") || "null");
-        labSeq = cardsFromHistory(lab && lab.history);
-      } catch (_) {}
-      return { machine, live: chooseLiveSequence(playerSeq, labSeq) };
+      if (!state.shoeLen) return "Blackjack Live Table has no sequence yet.";
+      return `Blackjack Live Table · ${left} of ${state.shoeLen} cards left`;
     }
 
     function loadLoadChoice() {
@@ -720,93 +680,13 @@
         const table = Number(saved && saved.table);
         if (table >= 2 && table <= 6) state.machineTable = table;
       } catch (_) {}
+      const qMode = QS.get("mode");
+      if (qMode === "live" || qMode === "machine") state.loadMode = qMode;
+      const qTable = Number(QS.get("table"));
+      if (qTable >= 2 && qTable <= 6) { state.loadMode = "machine"; state.machineTable = qTable; }
     }
-
     function saveLoadChoice() {
       localStorage.setItem(LOAD_KEY, JSON.stringify({ mode: state.loadMode, table: state.machineTable }));
-    }
-
-    function handInProgress() {
-      return state.phase !== "betting" && state.phase !== "settled";
-    }
-
-    function currentSourceCards() {
-      if (state.loadMode === "live") return state.liveSequence || [];
-      return state.machineShoes[String(state.machineTable)] || [];
-    }
-
-    function cardsLeft() {
-      return Math.max(0, state.feedAll.length - state.feedIndex);
-    }
-
-    function commitFeed(key, cards) {
-      const extended = state.feedAll.length > 0
-        && cards.length >= state.feedAll.length
-        && state.feedAll.every((card, index) => cards[index] === card);
-      state.feedKey = key;
-      state.feedIndex = extended ? Math.min(state.feedIndex, cards.length) : 0;
-      state.feedAll = cards.slice();
-      state.queuedFeed = null;
-    }
-
-    function syncFeed() {
-      const cards = currentSourceCards();
-      const key = `${state.loadMode}:${state.machineTable}:${cards.join("|")}`;
-      if (key === state.feedKey) return;
-      if (handInProgress() && state.feedAll.length) {
-        state.queuedFeed = { key, cards: cards.slice() };
-        return;
-      }
-      commitFeed(key, cards);
-    }
-
-    function flushQueuedFeed() {
-      if (!state.queuedFeed || handInProgress()) return;
-      commitFeed(state.queuedFeed.key, state.queuedFeed.cards);
-    }
-
-    function refreshSources() {
-      const remoteShoes = state.remoteMachine || {};
-      const localShoes = state.localMachine || {};
-      state.machineShoes = Object.keys(remoteShoes).length ? remoteShoes : localShoes;
-      state.liveSequence = (state.remoteLive && state.remoteLive.length) ? state.remoteLive : (state.localLive || []);
-      syncFeed();
-    }
-
-    function applyLocalSources() {
-      const local = readLocalSources();
-      state.localMachine = local.machine;
-      state.localLive = local.live;
-      refreshSources();
-    }
-
-    function feedDetail() {
-      const left = cardsLeft();
-      if (state.loadMode === "machine") {
-        if (!state.feedAll.length) return "Machine shoes are not set yet. Build them on e Blackjack.";
-        return `e Blackjack ${state.machineTable} · ${left} of ${state.feedAll.length} cards left`;
-      }
-      if (!state.feedAll.length) return "Blackjack Live Table has no sequence yet.";
-      return `Blackjack Live Table · ${left} of ${state.feedAll.length} cards left`;
-    }
-
-    function sourceHeadline() {
-      return state.loadMode === "machine" ? "Loaded from machine" : "Loaded from live";
-    }
-
-    function setLoadMode(mode) {
-      if (mode !== "live" && mode !== "machine") return;
-      if (mode === state.loadMode) return;
-      if (handInProgress()) {
-        say("Finish this hand first", "Choose Live or Machine between hands.");
-        render();
-        return;
-      }
-      state.loadMode = mode;
-      saveLoadChoice();
-      syncFeed();
-      say(sourceHeadline(), feedDetail());
-      render();
     }
 
     function paintLoadSource() {
@@ -823,78 +703,108 @@
       const tableLabel = document.getElementById("machineTableLabel");
       if (tableLabel) tableLabel.hidden = state.loadMode !== "machine";
       const kicker = document.getElementById("loadKicker");
-      if (kicker) kicker.textContent = sourceHeadline();
+      if (kicker) kicker.textContent = state.connected ? sourceHeadline() : "Connecting…";
       const detail = document.getElementById("loadDetail");
-      if (detail) detail.textContent = feedDetail();
+      if (detail) detail.textContent = state.connected ? feedDetail() : "Reaching the table server…";
       const kind = document.getElementById("shoeKind");
       if (kind) kind.textContent = state.loadMode === "machine" ? "Machine" : "Live";
     }
 
-    function applyRemotePayload(data) {
-      const tables = (data.machine && data.machine.tables) || {};
-      const remoteTables = {};
-      [2, 3, 4, 5, 6].forEach((n) => {
-        const shoe = tables[n] || tables[String(n)];
-        if (Array.isArray(shoe) && shoe.length === 416 && shoe.every(validCard)) remoteTables[String(n)] = shoe.slice();
+    /* ---------- network ---------- */
+    let lastRenderVersion = -1;
+    let flashUntil = 0;
+
+    function flashNote(main, sub) {
+      say(main, sub);
+      flashUntil = Date.now() + 2600;
+      lastRenderVersion = -1;
+      render();
+    }
+
+    function normalizeSeat(seat) {
+      return Object.assign(emptySeat(), seat, {
+        hands: Array.isArray(seat.hands) ? seat.hands : [],
+        badges: Array.isArray(seat.badges) ? seat.badges : []
       });
-      if (Object.keys(remoteTables).length) state.remoteMachine = remoteTables;
-      const remoteLive = chooseLiveSequence(data.player && data.player.sequence, data.lab && data.lab.sequence);
-      if (remoteLive.length) state.remoteLive = remoteLive;
     }
 
-    async function pullMachineOrigin() {
+    function applyServerState(s) {
+      state.loadMode = s.loadMode;
+      state.machineTable = s.machineTable || state.machineTable;
+      state.seats = s.seats.map(normalizeSeat);
+      state.dealer = s.dealer || [];
+      state.holeHidden = s.holeHidden;
+      state.phase = s.phase;
+      state.activeSeat = s.activeSeat;
+      state.activeHand = s.activeHand;
+      state.insuranceAt = s.insuranceAt;
+      state.shoeLeft = s.shoeLeft;
+      state.shoeLen = s.shoeLen;
+      state.version = s.version;
+      state.deadline = s.deadline;
+      if (Date.now() > flashUntil) { state.main = s.main; state.sub = s.sub; }
+      const mine = state.seats.findIndex((se) => se.occupied && se.playerId === myId);
+      state.mySeat = mine;
+      if (mine >= 0) state.selected = mine;
+      else if (state.selected == null || state.selected < 0 || state.selected >= SEATS) state.selected = 2;
+      state.connected = true;
+    }
+
+    async function getState() {
       try {
-        const response = await fetch(`${MACHINE_ORIGIN}/api/sources`, { cache: "no-store" });
-        if (!response.ok) return;
-        const data = await response.json();
-        const before = `${state.feedKey}:${cardsLeft()}:${state.loadMode}`;
-        applyRemotePayload(data);
-        refreshSources();
-        const after = `${state.feedKey}:${cardsLeft()}:${state.loadMode}`;
-        if (before !== after) render();
+        const url = `${SERVER}/api/room?room=${encodeURIComponent(roomId())}&playerId=${encodeURIComponent(myId)}`;
+        const res = await fetch(url, { cache: "no-store" });
+        if (!res.ok) throw new Error("bad");
+        const data = await res.json();
+        if (!data.ok) throw new Error(data.error || "bad");
+        applyServerState(data.state);
+        if (state.version !== lastRenderVersion) { lastRenderVersion = state.version; render(); }
         else paintLoadSource();
-      } catch (_) {}
-    }
-
-    function startLoadSources() {
-      applyLocalSources();
-      window.addEventListener("storage", (event) => {
-        if (event.key === "bj_casino_tables_v1" || event.key === "bj_player_table_v1" || event.key === "bj_prediction_lab_v1") {
-          applyLocalSources();
+      } catch (_) {
+        if (state.connected || lastRenderVersion !== -2) {
+          state.connected = false;
+          lastRenderVersion = -2;
+          say("Connecting to the table…", "Open this page from the game server address, then wait a moment.");
           render();
         }
-      });
-      pullMachineOrigin();
-      setInterval(pullMachineOrigin, 1000);
-    }
-
-    function draw() {
-      if (state.feedIndex >= state.feedAll.length) return null;
-      const card = state.feedAll[state.feedIndex];
-      state.feedIndex += 1;
-      return card;
-    }
-
-    function seatedCount() { return state.seats.filter((seat) => seat.occupied).length; }
-
-    function bettingSeats() {
-      const indexes = [];
-      for (let i = SEATS - 1; i >= 0; i -= 1) {
-        const seat = state.seats[i];
-        if (seat.occupied && seat.bet >= MIN_BET) indexes.push(i);
       }
-      return indexes;
     }
 
-    function wager(seat) { return seat.bet + seat.pairBet + seat.jackpotBet; }
-
-    function say(main, sub) { state.main = main; state.sub = sub; }
-
-    function money(n) { return `$${Math.round(n).toLocaleString("en-US")}`; }
-    function escapeHtml(value) {
-      return String(value).replace(/[&<>"']/g, (ch) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "\"": "&quot;", "'": "&#39;" }[ch]));
+    async function sendAction(action, extra) {
+      const body = Object.assign({ room: roomId(), playerId: myId, action }, extra || {});
+      try {
+        const res = await fetch(`${SERVER}/api/room`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body)
+        });
+        const data = await res.json();
+        if (data.state) applyServerState(data.state);
+        if (!data.ok && data.error) { say(sourceHeadline(), data.error); flashUntil = Date.now() + 2600; }
+        lastRenderVersion = state.version;
+        render();
+        return data;
+      } catch (_) {
+        flashNote("Connecting to the table…", "The game server did not answer. Try again.");
+        return { ok: false };
+      }
     }
-    function avatarSrc(n) { return `assets/avatar-${((Number(n) || 1) - 1) % AVATARS + 1}.jpg`; }
+
+    async function switchRoom(mode, table) {
+      if (handInProgress()) { flashNote("Finish this hand first", "Change the source between hands."); render(); return; }
+      await sendAction("leaveAll");
+      state.loadMode = mode;
+      if (table) state.machineTable = table;
+      saveLoadChoice();
+      state.selected = 2;
+      state.mySeat = -1;
+      lastRenderVersion = -1;
+      flashNote(
+        mode === "machine" ? `Switched to e Blackjack ${state.machineTable}` : "Switched to the live table",
+        "Sit down to join this table. Players who pick this source play together."
+      );
+      await getState();
+    }
 
     /* ---------- sound ---------- */
     let soundOn = localStorage.getItem(SOUND_KEY) !== "0";
@@ -948,44 +858,6 @@
       document.getElementById("btnSound").classList.toggle("off", !soundOn);
     }
 
-    /* ---------- persistence ---------- */
-    function saveSeats() {
-      const seats = state.seats.map((seat) => ({
-        occupied: seat.occupied,
-        name: seat.name,
-        avatar: seat.avatar,
-        bankroll: seat.bankroll
-      }));
-      localStorage.setItem(SAVE_KEY, JSON.stringify({ seats }));
-    }
-
-    function loadSeats() {
-      state.seats = Array.from({ length: SEATS }, emptySeat);
-      try {
-        const saved = JSON.parse(localStorage.getItem(SAVE_KEY) || "null");
-        const seats = saved && saved.seats;
-        if (!Array.isArray(seats)) return;
-        const place = (index, savedSeat) => {
-          const seat = state.seats[index];
-          seat.occupied = true;
-          seat.name = String(savedSeat.name).slice(0, 16);
-          seat.bankroll = Math.max(0, Number(savedSeat.bankroll) || 0);
-          seat.avatar = Number(savedSeat.avatar) || (index % AVATARS) + 1;
-        };
-        const overflow = [];
-        seats.forEach((savedSeat, index) => {
-          if (!savedSeat || !savedSeat.occupied || !savedSeat.name) return;
-          if (index < SEATS) place(index, savedSeat);
-          else overflow.push(savedSeat);
-        });
-        /* The table used to have seven seats: move players from seats 6-7 into any free seat. */
-        overflow.forEach((savedSeat) => {
-          const free = state.seats.findIndex((seat) => !seat.occupied);
-          if (free >= 0) place(free, savedSeat);
-        });
-      } catch (_) {}
-    }
-
     /* ---------- cards ---------- */
     const cardMemo = new Map();
     let freshCards = 0;
@@ -1032,7 +904,6 @@
       return `<div class="playing-card ${isRed(code) ? "red" : "black"}"><div class="corner tl"><b>${rank}</b><i>${suit}</i></div>${mid}<div class="corner br"><b>${rank}</b><i>${suit}</i></div></div>`;
     }
 
-    /* Phone-only panel: big, readable copies of the dealer's hand and the focused seat's hands. */
     function renderMobileHand() {
       const el = document.getElementById("mobileHand");
       if (!portrait) { el.innerHTML = ""; return; }
@@ -1060,9 +931,7 @@
       const denoms = [1000, 500, 100, 25];
       const list = [];
       let rest = amount;
-      denoms.forEach((d) => {
-        while (rest >= d && list.length < 6) { list.push(d); rest -= d; }
-      });
+      denoms.forEach((d) => { while (rest >= d && list.length < 6) { list.push(d); rest -= d; } });
       return list.reverse().map((d, k) => `<i class="mchip c${d}" style="--k:${k}"></i>`).join("");
     }
 
@@ -1070,9 +939,7 @@
     const bankView = [];
     const bankAnim = {};
     let bankRaf = 0;
-
     function bankValue(i) { return Math.round(bankView[i] !== undefined ? bankView[i] : state.seats[i].bankroll); }
-
     function syncBanks() {
       state.seats.forEach((seat, i) => {
         if (!seat.occupied) { bankView[i] = undefined; delete bankAnim[i]; return; }
@@ -1085,7 +952,6 @@
       });
       if (Object.keys(bankAnim).length && !bankRaf) bankRaf = requestAnimationFrame(tickBanks);
     }
-
     function tickBanks(now) {
       bankRaf = 0;
       let active = false;
@@ -1102,13 +968,11 @@
 
     /* ---------- render ---------- */
     function selectedSeat() { return state.seats[state.selected] || state.seats[0]; }
-
     function resultText(r) {
       if (r.d > 0) return `${r.t} +${money(r.d)}`;
       if (r.d < 0) return `${r.t} −${money(-r.d)}`;
       return r.t;
     }
-
     function statusPill(hand, active) {
       if (hand.result) return "";
       if (active) return '<span class="st act">TURN</span>';
@@ -1118,7 +982,6 @@
       if (hand.status === "stand") return '<span class="st">STAND</span>';
       return "";
     }
-
     function spotHtml(index, key, label, odds, amount) {
       const on = state.selected === index && state.spot === key ? " on" : "";
       const cls = key === "main" ? "main" : key === "pair" ? "side pair" : "side jack";
@@ -1138,6 +1001,7 @@
       const asked = state.phase === "insurance" && bettingSeats()[state.insuranceAt] === index;
       const classes = ["seat"];
       if (state.selected === index) classes.push("sel");
+      if (isMine(index)) classes.push("mine");
       if (acting || asked) classes.push("turn");
       const origin = { x: pos.x, y: pos.y - 60 };
       const hands = seat.hands.map((hand, handIndex) => {
@@ -1152,12 +1016,13 @@
         return `<div class="hand-block${active && seat.hands.length > 1 ? " active" : ""}">${result}<div class="cards-row">${cards}</div>${bubble}</div>`;
       }).join("");
       const badges = (seat.badges || []).map((b) => `<span class="${b.c || ""}">${escapeHtml(b.t)}</span>`).join("");
+      const youTag = isMine(index) ? '<span class="you-flag">YOU</span>' : "";
       return `<div class="${classes.join(" ")}" data-select="${index}" ${place}>
         <div class="hands">${hands}</div>
         ${spotHtml(index, "pair", "Pair", "11:1", seat.pairBet)}
         ${spotHtml(index, "main", "Bet", "BJ 3:2", seat.bet)}
         ${spotHtml(index, "jackpot", "6-7-8", "3:1", seat.jackpotBet)}
-        <div class="tag"><span class="pno" style="background:${SEAT_COLORS[index]}">P${index + 1}</span><img src="${avatarSrc(seat.avatar)}" alt="" /><div class="tx"><b>${escapeHtml(seat.name)}</b><span class="bank" data-seat="${index}">${money(bankValue(index))}</span></div></div>
+        <div class="tag"><span class="pno" style="background:${SEAT_COLORS[index]}">P${index + 1}</span><img src="${avatarSrc(seat.avatar)}" alt="" /><div class="tx"><b>${escapeHtml(seat.name)}${youTag}</b><span class="bank" data-seat="${index}">${money(bankValue(index))}</span></div></div>
         <div class="seat-badges">${badges}</div>
       </div>`;
     }
@@ -1168,7 +1033,6 @@
       const stage = document.getElementById("stage");
       stage.classList.toggle("is-acting", state.phase === "acting");
 
-      /* profile + balance */
       const sel = selectedSeat();
       const profile = document.getElementById("profile");
       const balance = document.getElementById("balancePill");
@@ -1180,7 +1044,6 @@
         balance.innerHTML = "Balance —";
       }
 
-      /* dealer */
       const dealerEl = document.getElementById("dealerCards");
       dealerEl.innerHTML = state.dealer.map((code, index) => cardHtml(code, state.holeHidden && index === 1, `d-${index}`, { x: 640, y: 380 }, true)).join("");
       const dealerTotal = document.getElementById("dealerTotal");
@@ -1241,416 +1104,51 @@
         return `<button type="button" class="rbtn ${color || ""}${o.big ? " big" : ""}${o.pulse ? " pulse" : ""}" data-act="${act}"${o.disabled ? " disabled" : ""}><span class="disc">${icon}</span>${label}</button>`;
       };
 
+      const iAmSeated = state.mySeat >= 0;
+      const insuranceSeat = bettingSeats()[state.insuranceAt];
+      const insuranceMine = state.phase === "insurance" && insuranceSeat !== undefined && isMine(insuranceSeat);
+      const myActing = state.phase === "acting" && state.activeSeat !== null && isMine(state.activeSeat);
+
       let actions = "";
       if (state.phase === "betting") {
-        const ready = bettingSeats().length > 0 && !state.busy;
-        const occupied = seat && seat.occupied;
+        const ready = bettingSeats().length > 0;
         actions =
-          rbtn("clear", "Clear", icons.clear, "", { disabled: !occupied }) +
-          rbtn("rebet", "Repeat", icons.repeat, "", { disabled: !occupied }) +
+          rbtn("clear", "Clear", icons.clear, "", { disabled: !iAmSeated }) +
+          rbtn("rebet", "Repeat", icons.repeat, "", { disabled: !iAmSeated }) +
           rbtn("deal", "Deal", icons.check, "green", { big: true, disabled: !ready, pulse: ready }) +
-          rbtn("rebuy", `Rebuy`, icons.plus, "gold", { disabled: !occupied }) +
-          rbtn("leave", "Leave", icons.leave, "", { disabled: !occupied });
+          rbtn("rebuy", "Rebuy", icons.plus, "gold", { disabled: !iAmSeated }) +
+          rbtn("leave", "Leave", icons.leave, "", { disabled: !iAmSeated });
       } else if (state.phase === "insurance") {
-        actions =
-          rbtn("insure", "Insurance", icons.shield, "gold", { pulse: true }) +
-          rbtn("even", "Even money", icons.plus, "green") +
-          rbtn("decline", "No thanks", icons.clear, "red");
+        if (insuranceMine) {
+          actions =
+            rbtn("insure", "Insurance", icons.shield, "gold", { pulse: true }) +
+            rbtn("even", "Even money", icons.plus, "green") +
+            rbtn("decline", "No thanks", icons.clear, "red");
+        } else {
+          const who = insuranceSeat !== undefined ? state.seats[insuranceSeat].name : "a player";
+          actions = rbtn("wait", `${who}'s insurance`, icons.shield, "", { disabled: true });
+        }
       } else if (state.phase === "acting") {
-        const current = state.seats[state.activeSeat];
-        const hand = current && current.hands[state.activeHand];
-        const canDouble = !!hand && hand.cards.length === 2 && current.bankroll >= hand.bet;
-        const canSplit = !!hand && current.hands.length === 1 && hand.cards.length === 2 && rankOf(hand.cards[0]) === rankOf(hand.cards[1]) && current.bankroll >= hand.bet;
-        actions =
-          rbtn("hit", "Hit", icons.hit, "green", { big: true, pulse: true }) +
-          rbtn("stand", "Stand", icons.stand, "") +
-          rbtn("double", "Double down", icons.double, "", { disabled: !canDouble }) +
-          rbtn("split", "Split", icons.split, "gold", { disabled: !canSplit });
+        if (myActing) {
+          const current = state.seats[state.activeSeat];
+          const hand = current && current.hands[state.activeHand];
+          const canDouble = !!hand && hand.cards.length === 2 && current.bankroll >= hand.bet;
+          const canSplit = !!hand && current.hands.length === 1 && hand.cards.length === 2 && rankOf(hand.cards[0]) === rankOf(hand.cards[1]) && current.bankroll >= hand.bet;
+          actions =
+            rbtn("hit", "Hit", icons.hit, "green", { big: true, pulse: true }) +
+            rbtn("stand", "Stand", icons.stand, "") +
+            rbtn("double", "Double down", icons.double, "", { disabled: !canDouble }) +
+            rbtn("split", "Split", icons.split, "gold", { disabled: !canSplit });
+        } else {
+          const who = state.activeSeat !== null ? state.seats[state.activeSeat].name : "a player";
+          actions = rbtn("wait", `${who} is playing`, icons.next, "", { disabled: true });
+        }
       } else if (state.phase === "settled") {
         actions = rbtn("next", "Next round", icons.next, "green", { big: true, pulse: true });
       } else {
         actions = rbtn("wait", "Dealer plays", icons.next, "", { disabled: true });
       }
       document.getElementById("actionBar").innerHTML = actions;
-    }
-
-    /* ---------- betting + round flow (unchanged rules) ---------- */
-    function addChip(seatIndex) {
-      if (state.phase !== "betting") return;
-      const seat = state.seats[seatIndex];
-      if (!seat || !seat.occupied) return;
-      const key = state.spot === "pair" ? "pairBet" : state.spot === "jackpot" ? "jackpotBet" : "bet";
-      const next = seat[key] + state.chip;
-      if (next > MAX_BET) return;
-      if (wager(seat) + state.chip > seat.bankroll) {
-        say(seat.name, "That chip is more than the chips in front of this seat.");
-        render();
-        return;
-      }
-      seat[key] = next;
-      play("chip");
-      say(`Betting for ${seat.name}`, "Set a main bet of at least $25, then deal. Pair pays 11 to 1. Suited 6-7-8 or 7-7-7 pays 3 to 1.");
-      render();
-    }
-
-    function clearBets(seat) {
-      seat.bet = 0;
-      seat.pairBet = 0;
-      seat.jackpotBet = 0;
-    }
-
-    function freshHands() {
-      state.dealer = [];
-      state.holeHidden = true;
-      cardMemo.clear();
-      state.seats.forEach((seat) => {
-        seat.hands = [];
-        seat.badges = [];
-        seat.insurance = 0;
-        seat.evenMoney = false;
-      });
-    }
-
-    function sleep(ms) { return new Promise((resolve) => setTimeout(resolve, ms)); }
-
-    async function dealRound() {
-      const players = bettingSeats();
-      if (!players.length || state.busy) return;
-      flushQueuedFeed();
-      const needed = players.length * 2 + 2;
-      if (cardsLeft() < needed) {
-        say(
-          state.feedAll.length ? `${sourceHeadline()} is short` : sourceHeadline(),
-          state.feedAll.length
-            ? `Only ${cardsLeft()} cards left, and this hand needs ${needed}.`
-            : feedDetail()
-        );
-        render();
-        return;
-      }
-      state.busy = true;
-      freshHands();
-      players.forEach((index) => {
-        const seat = state.seats[index];
-        seat.bankroll -= wager(seat);
-        seat.lastBet = seat.bet;
-        seat.lastPair = seat.pairBet;
-        seat.lastJackpot = seat.jackpotBet;
-        seat.hands = [{ cards: [], bet: seat.bet, status: "play" }];
-      });
-      state.phase = "dealing";
-      say("Dealing", state.loadMode === "machine" ? "Cards are loading from the machine." : "Cards are loading from the live table.");
-      render();
-      for (let pass = 0; pass < 2; pass += 1) {
-        for (const index of players) {
-          const card = draw();
-          if (!card) break;
-          state.seats[index].hands[0].cards.push(card);
-          render();
-          await sleep(190);
-        }
-        const dealerCard = draw();
-        if (!dealerCard) break;
-        state.dealer.push(dealerCard);
-        render();
-        await sleep(190);
-      }
-      players.forEach((index) => settlePair(state.seats[index]));
-      const up = rankOf(state.dealer[0]);
-      const tenUp = ["10", "J", "Q", "K"].includes(up);
-      if (up === "A") {
-        state.phase = "insurance";
-        state.insuranceAt = 0;
-        askInsurance();
-      } else if (tenUp) {
-        await finishPeek();
-      } else {
-        await beginActing();
-      }
-      state.busy = false;
-      render();
-    }
-
-    function askInsurance() {
-      const players = bettingSeats();
-      const index = players[state.insuranceAt];
-      if (index === undefined) return;
-      const seat = state.seats[index];
-      const natural = handValue(seat.hands[0].cards) === 21;
-      say(
-        natural ? `${seat.name} has blackjack` : `${seat.name}, insurance?`,
-        natural ? "Even money pays 1 to 1 now. Insurance pays 2 to 1 if the dealer has blackjack." : `Insurance is ${money(Math.floor(seat.bet / 2))} and pays 2 to 1.`
-      );
-    }
-
-    function currentInsuranceSeat() {
-      return state.seats[bettingSeats()[state.insuranceAt]];
-    }
-
-    async function advanceInsurance() {
-      state.insuranceAt += 1;
-      if (state.insuranceAt >= bettingSeats().length) await finishPeek();
-      else askInsurance();
-    }
-
-    async function finishPeek() {
-      state.busy = true;
-      const holeRank = rankOf(state.dealer[1]);
-      const dealerBlackjack = handValue(state.dealer) === 21;
-      const up = rankOf(state.dealer[0]);
-      const checked = up === "A" || ["10", "J", "Q", "K"].includes(up);
-      if (checked && dealerBlackjack) {
-        state.holeHidden = false;
-        say("Dealer blackjack", holeRank ? "The hole card makes 21." : "");
-        settleAll();
-      } else {
-        if (checked) say("No dealer blackjack", "Players act from the dealer's left.");
-        await beginActing();
-      }
-      state.busy = false;
-      render();
-    }
-
-    async function beginActing() {
-      bettingSeats().forEach((index) => {
-        const hand = state.seats[index].hands[0];
-        if (hand.status !== "even" && handValue(hand.cards) === 21) hand.status = "blackjack";
-      });
-      if (!nextActor()) await playDealer();
-    }
-
-    function nextActor() {
-      const players = bettingSeats();
-      for (const index of players) {
-        const seat = state.seats[index];
-        for (let h = 0; h < seat.hands.length; h += 1) {
-          if (seat.hands[h].status === "play") {
-            state.phase = "acting";
-            state.activeSeat = index;
-            state.activeHand = h;
-            state.selected = index;
-            const label = seat.hands.length > 1 ? ` hand ${h + 1}` : "";
-            say(`${seat.name}${label}`, "Hit, stand, double, or split.");
-            return true;
-          }
-        }
-      }
-      return false;
-    }
-
-    async function afterPlayerAction() {
-      const jackpotSeat = state.seats[state.activeSeat];
-      if (jackpotSeat) settleJackpot(jackpotSeat);
-      if (!nextActor()) await playDealer();
-      else render();
-    }
-
-    async function playDealer() {
-      state.phase = "dealer";
-      state.holeHidden = false;
-      const live = bettingSeats().some((index) => state.seats[index].hands.some((hand) => hand.status !== "bust" && hand.status !== "even"));
-      say("Dealer's hand", live ? "The dealer draws to 17." : "Every player hand is finished.");
-      render();
-      if (live) {
-        while (handValue(state.dealer) < 17) {
-          const card = draw();
-          if (!card) {
-            say(sourceHeadline(), "No further card was left in this load.");
-            break;
-          }
-          await sleep(520);
-          state.dealer.push(card);
-          render();
-        }
-      }
-      await sleep(380);
-      settleAll();
-    }
-
-    function settlePair(seat) {
-      const cards = seat.hands[0].cards;
-      if (seat.pairBet > 0 && rankOf(cards[0]) === rankOf(cards[1])) {
-        seat.bankroll += seat.pairBet * 12;
-        seat.pairWon = true;
-        seat.badges.push({ t: `PAIR +${money(seat.pairBet * 11)}` });
-      } else seat.pairWon = false;
-    }
-
-    function suitedJackpot(cards) {
-      if (cards.length < 3) return false;
-      const first = cards.slice(0, 3);
-      if (new Set(first.map(suitOf)).size !== 1) return false;
-      const ranks = first.map(rankOf);
-      if (ranks.every((rank) => rank === "7")) return true;
-      return [...ranks].sort().join("-") === "6-7-8";
-    }
-
-    function settleJackpot(seat) {
-      if (seat.jackpotPaid || seat.hands.length !== 1) return;
-      const cards = seat.hands[0].cards;
-      if (cards.length < 3) return;
-      seat.jackpotPaid = true;
-      if (seat.jackpotBet > 0 && suitedJackpot(cards)) {
-        seat.bankroll += seat.jackpotBet * 4;
-        seat.jackpotWon = true;
-        seat.badges.push({ t: `6-7-8 +${money(seat.jackpotBet * 3)}` });
-      }
-    }
-
-    function settleAll() {
-      state.holeHidden = false;
-      state.phase = "settled";
-      const dealerTotal = handValue(state.dealer);
-      const dealerBlackjack = state.dealer.length === 2 && dealerTotal === 21;
-      const notes = [];
-      let anyWin = false;
-      let anyLoss = false;
-      bettingSeats().forEach((index) => {
-        const seat = state.seats[index];
-        if (seat.insurance > 0) {
-          if (dealerBlackjack) {
-            seat.bankroll += seat.insurance * 3;
-            notes.push(`${seat.name} insurance wins`);
-            seat.badges.push({ t: `INSURANCE +${money(seat.insurance * 2)}` });
-            anyWin = true;
-          } else notes.push(`${seat.name} insurance loses`);
-        }
-        if (seat.pairBet > 0) notes.push(seat.pairWon ? `${seat.name} pair wins` : `${seat.name} pair loses`);
-        settleJackpot(seat);
-        if (seat.jackpotBet > 0) notes.push(seat.jackpotWon ? `${seat.name} jackpot wins` : `${seat.name} jackpot loses`);
-        seat.hands.forEach((hand, handIndex) => {
-          const tag = seat.hands.length > 1 ? ` hand ${handIndex + 1}` : "";
-          if (hand.status === "even") {
-            hand.result = { t: "EVEN MONEY", c: "win", d: hand.bet };
-            anyWin = true;
-            notes.push(`${seat.name}${tag} even money`);
-            return;
-          }
-          const total = handValue(hand.cards);
-          const natural = hand.status === "blackjack";
-          if (hand.status === "bust" || total > 21) {
-            hand.result = { t: "BUST", c: "lose", d: -hand.bet };
-            anyLoss = true;
-            notes.push(`${seat.name}${tag} busts`);
-          } else if (natural && dealerBlackjack) {
-            seat.bankroll += hand.bet;
-            hand.result = { t: "PUSH", c: "push", d: 0 };
-            notes.push(`${seat.name}${tag} push`);
-          } else if (natural) {
-            const profit = Math.floor(hand.bet * 1.5);
-            seat.bankroll += hand.bet + profit;
-            hand.result = { t: "BLACKJACK", c: "win", d: profit };
-            anyWin = true;
-            notes.push(`${seat.name}${tag} blackjack`);
-          } else if (dealerBlackjack || (dealerTotal <= 21 && total < dealerTotal)) {
-            hand.result = { t: "LOSE", c: "lose", d: -hand.bet };
-            anyLoss = true;
-            notes.push(`${seat.name}${tag} loses`);
-          } else if (dealerTotal > 21 || total > dealerTotal) {
-            seat.bankroll += hand.bet * 2;
-            hand.result = { t: "WIN", c: "win", d: hand.bet };
-            anyWin = true;
-            notes.push(`${seat.name}${tag} wins`);
-          } else {
-            seat.bankroll += hand.bet;
-            hand.result = { t: "PUSH", c: "push", d: 0 };
-            notes.push(`${seat.name}${tag} push`);
-          }
-        });
-        clearBets(seat);
-        seat.jackpotPaid = false;
-        seat.jackpotWon = false;
-      });
-      say("Round complete", notes.join(" · ") || "No bets were in action.");
-      state.activeSeat = null;
-      saveSeats();
-      render();
-      if (anyWin) play("win");
-      else if (anyLoss) play("lose");
-    }
-
-    async function hit() {
-      const seat = state.seats[state.activeSeat];
-      const hand = seat.hands[state.activeHand];
-      const card = draw();
-      if (!card) {
-        hand.status = "stand";
-        say(sourceHeadline(), "No further card was left in this load.");
-        await afterPlayerAction();
-        return;
-      }
-      hand.cards.push(card);
-      const total = handValue(hand.cards);
-      if (total > 21) hand.status = "bust";
-      else if (total === 21) hand.status = "stand";
-      await afterPlayerAction();
-    }
-
-    async function stand() {
-      state.seats[state.activeSeat].hands[state.activeHand].status = "stand";
-      await afterPlayerAction();
-    }
-
-    async function doubleDown() {
-      const seat = state.seats[state.activeSeat];
-      const hand = seat.hands[state.activeHand];
-      if (hand.cards.length !== 2 || seat.bankroll < hand.bet) return;
-      const card = draw();
-      if (!card) {
-        say(sourceHeadline(), "No further card was left in this load.");
-        render();
-        return;
-      }
-      seat.bankroll -= hand.bet;
-      hand.bet *= 2;
-      hand.cards.push(card);
-      hand.status = handValue(hand.cards) > 21 ? "bust" : "stand";
-      play("chip");
-      await afterPlayerAction();
-    }
-
-    async function split() {
-      const seat = state.seats[state.activeSeat];
-      const hand = seat.hands[state.activeHand];
-      if (seat.hands.length !== 1 || hand.cards.length !== 2) return;
-      if (rankOf(hand.cards[0]) !== rankOf(hand.cards[1]) || seat.bankroll < hand.bet) return;
-      if (cardsLeft() < 2) {
-        say(sourceHeadline(), "This load does not have two cards left to split.");
-        render();
-        return;
-      }
-      seat.bankroll -= hand.bet;
-      const secondCard = hand.cards.pop();
-      const aces = rankOf(hand.cards[0]) === "A";
-      hand.cards.push(draw());
-      const second = { cards: [secondCard, draw()], bet: hand.bet, status: "play" };
-      hand.status = aces || handValue(hand.cards) === 21 ? "stand" : "play";
-      second.status = aces || handValue(second.cards) === 21 ? "stand" : "play";
-      seat.hands.push(second);
-      play("chip");
-      await afterPlayerAction();
-    }
-
-    async function takeInsurance(even) {
-      if (state.phase !== "insurance") return;
-      const seat = currentInsuranceSeat();
-      if (!seat) return;
-      const natural = handValue(seat.hands[0].cards) === 21;
-      if (even) {
-        if (!natural) return;
-        seat.bankroll += seat.hands[0].bet * 2;
-        seat.hands[0].status = "even";
-        seat.evenMoney = true;
-      } else {
-        const cost = Math.floor(seat.bet / 2);
-        if (cost > 0 && seat.bankroll >= cost) {
-          seat.bankroll -= cost;
-          seat.insurance = cost;
-          play("chip");
-        }
-      }
-      await advanceInsurance();
-      render();
     }
 
     /* ---------- joining ---------- */
@@ -1664,29 +1162,20 @@
 
     function openJoin(index) {
       if (state.phase !== "betting" && state.phase !== "settled") {
-        say("Wait for the next round", "New players sit down between hands.");
-        render();
+        flashNote("Wait for the next round", "New players sit down between hands.");
         return;
       }
-      if (state.phase === "settled") nextRound();
+      if (state.seats[index].occupied) { flashNote("Seat taken", "Pick an open seat."); return; }
       state.pendingSeat = index;
       const taken = new Set(state.seats.filter((s) => s.occupied).map((s) => s.avatar));
-      let pick = (index % AVATARS) + 1;
+      let pick = myAvatar && !taken.has(myAvatar) ? myAvatar : (index % AVATARS) + 1;
       for (let i = 0; i < AVATARS && taken.has(pick); i += 1) pick = (pick % AVATARS) + 1;
       state.pendingAvatar = pick;
       renderAvatarPick();
       document.getElementById("joinTitle").textContent = `Seat ${index + 1}`;
-      document.getElementById("joinName").value = "";
+      document.getElementById("joinName").value = myName || "";
       document.getElementById("joinMask").classList.add("show");
       document.getElementById("joinName").focus();
-    }
-
-    function nextRound() {
-      freshHands();
-      state.phase = "betting";
-      say("Place your bets", "Every seated player sets a bet. Seats without a bet sit this hand out.");
-      saveSeats();
-      render();
     }
 
     /* ---------- events ---------- */
@@ -1694,61 +1183,44 @@
       const spot = event.target.closest("[data-spot]");
       if (spot) {
         event.stopPropagation();
-        state.selected = Number(spot.dataset.seat);
+        const seatIndex = Number(spot.dataset.seat);
+        state.selected = seatIndex;
         state.spot = spot.dataset.spot;
-        addChip(state.selected);
-        render();
+        if (isMine(seatIndex)) {
+          if (state.phase !== "betting") { flashNote("Bet between hands", "Wait for the next round."); return; }
+          play("chip");
+          sendAction("bet", { seat: seatIndex, spot: state.spot, chip: state.chip });
+        } else {
+          flashNote("That is not your seat", "Sit at an open seat to bet.");
+        }
         return;
       }
       const sit = event.target.closest("[data-sit]");
       if (sit) { openJoin(Number(sit.dataset.sit)); return; }
       const select = event.target.closest("[data-select]");
-      if (select) {
-        state.selected = Number(select.dataset.select);
-        render();
-      }
+      if (select) { state.selected = Number(select.dataset.select); render(); }
     });
 
     document.getElementById("dock").addEventListener("click", (event) => {
       const chip = event.target.closest("[data-chip]");
       if (chip) { state.chip = Number(chip.dataset.chip); play("chip"); render(); return; }
       const act = event.target.closest("[data-act]");
-      if (!act || act.disabled || state.busy) return;
+      if (!act || act.disabled) return;
       const action = act.dataset.act;
-      const seat = selectedSeat();
-      if (action === "clear" && seat.occupied && state.phase === "betting") { clearBets(seat); render(); }
-      if (action === "rebet" && seat.occupied && state.phase === "betting") {
-        clearBets(seat);
-        const wanted = seat.lastBet + seat.lastPair + seat.lastJackpot;
-        if (wanted >= MIN_BET && wanted <= seat.bankroll) {
-          seat.bet = seat.lastBet;
-          seat.pairBet = seat.lastPair;
-          seat.jackpotBet = seat.lastJackpot;
-          play("chip");
-        }
-        render();
-      }
-      if (action === "rebuy" && seat.occupied && state.phase === "betting") {
-        seat.bankroll += BUY_IN;
-        play("chip");
-        saveSeats();
-        render();
-      }
-      if (action === "leave" && seat.occupied && state.phase === "betting") {
-        state.seats[state.selected] = emptySeat();
-        saveSeats();
-        say("Seat open", "Another player can sit there.");
-        render();
-      }
-      if (action === "deal") dealRound();
-      if (action === "insure") takeInsurance(false);
-      if (action === "even") takeInsurance(true);
-      if (action === "decline") { advanceInsurance(); render(); }
-      if (action === "hit") hit();
-      if (action === "stand") stand();
-      if (action === "double") doubleDown();
-      if (action === "split") split();
-      if (action === "next") nextRound();
+      const betTarget = state.mySeat >= 0 ? state.mySeat : state.selected;
+      if (action === "clear") sendAction("clear", { seat: betTarget });
+      else if (action === "rebet") { play("chip"); sendAction("rebet", { seat: betTarget }); }
+      else if (action === "rebuy") { play("chip"); sendAction("rebuy", { seat: betTarget }); }
+      else if (action === "leave") sendAction("leave", { seat: betTarget });
+      else if (action === "deal") { play("chip"); sendAction("deal"); }
+      else if (action === "insure") { play("chip"); sendAction("insure"); }
+      else if (action === "even") { play("chip"); sendAction("even"); }
+      else if (action === "decline") sendAction("decline");
+      else if (action === "hit") sendAction("hit", { seat: state.activeSeat });
+      else if (action === "stand") sendAction("stand", { seat: state.activeSeat });
+      else if (action === "double") { play("chip"); sendAction("double", { seat: state.activeSeat }); }
+      else if (action === "split") { play("chip"); sendAction("split", { seat: state.activeSeat }); }
+      else if (action === "next") sendAction("next");
     });
 
     document.getElementById("avatarPick").addEventListener("click", (event) => {
@@ -1762,17 +1234,12 @@
       event.preventDefault();
       const name = document.getElementById("joinName").value.trim().slice(0, 16);
       if (!name) return;
-      const seat = emptySeat();
-      seat.occupied = true;
-      seat.name = name;
-      seat.avatar = state.pendingAvatar;
-      seat.bankroll = BUY_IN;
-      state.seats[state.pendingSeat] = seat;
-      state.selected = state.pendingSeat;
+      myName = name;
+      myAvatar = state.pendingAvatar;
+      localStorage.setItem(NAME_KEY, myName);
+      localStorage.setItem(AVATAR_KEY, String(myAvatar));
       document.getElementById("joinMask").classList.remove("show");
-      say(`${name} sits at seat ${state.pendingSeat + 1}`, "Pick a chip and tap your betting circle. Other open seats can still be taken.");
-      saveSeats();
-      render();
+      sendAction("sit", { seat: state.pendingSeat, name, avatar: state.pendingAvatar });
     });
 
     document.getElementById("joinCancel").addEventListener("click", () => {
@@ -1781,23 +1248,16 @@
 
     document.getElementById("loadToggle").addEventListener("click", (event) => {
       const button = event.target.closest("[data-load]");
-      if (!button) return;
-      setLoadMode(button.dataset.load);
+      if (!button || button.disabled) return;
+      const mode = button.dataset.load;
+      if (mode === state.loadMode) return;
+      switchRoom(mode, state.machineTable);
     });
     document.getElementById("machineTable").addEventListener("change", (event) => {
       const next = Number(event.target.value);
       if (next < 2 || next > 6) return;
-      if (handInProgress()) {
-        event.target.value = String(state.machineTable);
-        say("Finish this hand first", "Change the machine table between hands.");
-        render();
-        return;
-      }
-      state.machineTable = next;
-      saveLoadChoice();
-      syncFeed();
-      say("Loaded from machine", feedDetail());
-      render();
+      if (next === state.machineTable && state.loadMode === "machine") return;
+      switchRoom("machine", next);
     });
 
     document.getElementById("btnSound").addEventListener("click", () => {
@@ -1884,16 +1344,14 @@
 
     window.addEventListener("resize", () => { layout(); render(); });
 
-    loadSeats();
+    /* ---------- boot ---------- */
     loadLoadChoice();
-    startLoadSources();
-    const occupied = state.seats.findIndex((seat) => seat.occupied);
-    state.selected = occupied >= 0 ? occupied : 2;
-    if (occupied >= 0) say("Place your bets", "Pick a chip, tap your betting circle, then press Deal.");
-    else say("The table is open", "Tap a glowing circle to take a seat.");
     renderSoundButton();
     layout();
     render();
+    getState();
+    setInterval(getState, 1000);
+
   </script>
 </body>
 </html>
