@@ -1,0 +1,1227 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Blackjack Prediction Lab — 8-Deck Shoe &amp; Sequence Engine</title>
+  <style>
+    :root {
+      --bg: #0b0f17;
+      --panel: #121826;
+      --panel-2: #182133;
+      --border: #263248;
+      --text: #e6edf7;
+      --muted: #8fa1bf;
+      --accent: #38bdf8;
+      --accent-2: #22c55e;
+      --warn: #f59e0b;
+      --danger: #ef4444;
+      --red-suit: #f87171;
+      --black-suit: #e2e8f0;
+      --mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+      --sans: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      padding: 16px;
+      background: var(--bg);
+      color: var(--text);
+      font-family: var(--sans);
+      line-height: 1.45;
+    }
+
+    .container {
+      max-width: 1440px;
+      margin: 0 auto;
+    }
+
+    header {
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: space-between;
+      align-items: center;
+      gap: 12px;
+      padding: 14px 18px;
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      margin-bottom: 16px;
+    }
+
+    header h1 {
+      margin: 0;
+      font-size: 1.2rem;
+      letter-spacing: -0.01em;
+    }
+
+    header p {
+      margin: 2px 0 0;
+      color: var(--muted);
+      font-size: 0.85rem;
+    }
+
+    .header-actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+    }
+
+    button {
+      background: var(--panel-2);
+      color: var(--text);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 8px 12px;
+      font-size: 0.85rem;
+      font-weight: 600;
+      cursor: pointer;
+      transition: background 0.15s, border-color 0.15s, transform 0.05s;
+    }
+
+    button:hover:not(:disabled) {
+      background: #22304a;
+      border-color: #3b4f73;
+    }
+
+    button:active:not(:disabled) {
+      transform: translateY(1px);
+    }
+
+    button:disabled {
+      opacity: 0.4;
+      cursor: not-allowed;
+    }
+
+    button.primary {
+      background: #0284c7;
+      border-color: #38bdf8;
+      color: #ffffff;
+    }
+
+    button.primary:hover:not(:disabled) {
+      background: #0369a1;
+    }
+
+    button.success {
+      background: #15803d;
+      border-color: #4ade80;
+      color: #ffffff;
+    }
+
+    button.success:hover:not(:disabled) {
+      background: #166534;
+    }
+
+    button.danger {
+      background: #7f1d1d;
+      border-color: #f87171;
+      color: #fecaca;
+    }
+
+    .grid-main {
+      display: grid;
+      grid-template-columns: 1.15fr 0.85fr;
+      gap: 16px;
+      margin-bottom: 16px;
+    }
+
+    @media (max-width: 1080px) {
+      .grid-main {
+        grid-template-columns: 1fr;
+      }
+    }
+
+    .card {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 16px;
+    }
+
+    .card-title {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin: 0 0 12px;
+      font-size: 0.95rem;
+      font-weight: 700;
+      color: var(--accent);
+    }
+
+    .kpi-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(135px, 1fr));
+      gap: 10px;
+      margin-bottom: 14px;
+    }
+
+    .kpi {
+      background: var(--panel-2);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 10px 12px;
+    }
+
+    .kpi .label {
+      font-size: 0.73rem;
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+    }
+
+    .kpi .val {
+      font-family: var(--mono);
+      font-size: 1.15rem;
+      font-weight: 700;
+      margin-top: 3px;
+    }
+
+    .kpi .sub {
+      font-size: 0.74rem;
+      color: var(--muted);
+      margin-top: 2px;
+    }
+
+    .rules-strip {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-bottom: 12px;
+    }
+
+    .rule-pill {
+      background: var(--panel-2);
+      border: 1px solid var(--border);
+      border-radius: 999px;
+      padding: 4px 10px;
+      font-size: 0.76rem;
+      color: var(--muted);
+    }
+
+    .rule-pill strong {
+      color: var(--text);
+    }
+
+    .signal-box {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+      gap: 10px;
+    }
+
+    .signal {
+      background: var(--panel-2);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 10px 12px;
+      font-size: 0.82rem;
+    }
+
+    .badge {
+      display: inline-block;
+      padding: 2px 7px;
+      border-radius: 6px;
+      font-size: 0.72rem;
+      font-weight: 700;
+      font-family: var(--mono);
+    }
+
+    .badge-good { background: rgba(34, 197, 94, 0.18); color: #4ade80; border: 1px solid rgba(34, 197, 94, 0.4); }
+    .badge-warn { background: rgba(245, 158, 11, 0.18); color: #fbbf24; border: 1px solid rgba(245, 158, 11, 0.4); }
+    .badge-bad  { background: rgba(239, 68, 68, 0.18); color: #f87171; border: 1px solid rgba(239, 68, 68, 0.4); }
+    .badge-info { background: rgba(56, 189, 248, 0.18); color: #38bdf8; border: 1px solid rgba(56, 189, 248, 0.4); }
+
+    .deck-matrix {
+      display: grid;
+      grid-template-columns: repeat(13, minmax(44px, 1fr));
+      gap: 5px;
+      overflow-x: auto;
+      padding-bottom: 4px;
+      margin-bottom: 12px;
+    }
+
+    .card-btn {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      padding: 6px 3px;
+      border-radius: 7px;
+      background: var(--panel-2);
+      border: 1px solid var(--border);
+      font-family: var(--mono);
+      line-height: 1.15;
+    }
+
+    .card-btn .c-name {
+      font-size: 0.84rem;
+      font-weight: 700;
+    }
+
+    .card-btn .c-rem {
+      font-size: 0.68rem;
+      color: var(--muted);
+      margin-top: 2px;
+    }
+
+    .suit-red { color: var(--red-suit); }
+    .suit-black { color: var(--black-suit); }
+
+    .quick-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-bottom: 10px;
+    }
+
+    input[type="text"] {
+      flex: 1;
+      min-width: 220px;
+      background: var(--panel-2);
+      color: var(--text);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 8px 11px;
+      font-family: var(--mono);
+      font-size: 0.84rem;
+    }
+
+    .prediction-banner {
+      background: var(--panel-2);
+      border: 1px solid #38bdf8;
+      border-radius: 10px;
+      padding: 12px;
+      margin-bottom: 12px;
+    }
+
+    .prediction-main {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      margin-top: 6px;
+    }
+
+    .pred-pick {
+      font-family: var(--mono);
+      font-size: 1.3rem;
+      font-weight: 800;
+      color: var(--accent);
+    }
+
+    .score-grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 8px;
+      margin-bottom: 10px;
+    }
+
+    textarea.code-editor {
+      width: 100%;
+      min-height: 290px;
+      background: #080c14;
+      color: #d8e6ff;
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 12px;
+      font-family: var(--mono);
+      font-size: 0.8rem;
+      line-height: 1.5;
+      resize: vertical;
+      tab-size: 2;
+    }
+
+    .code-status {
+      margin-top: 8px;
+      font-family: var(--mono);
+      font-size: 0.78rem;
+      min-height: 20px;
+    }
+
+    .history-wrap {
+      max-height: 300px;
+      overflow-y: auto;
+      border: 1px solid var(--border);
+      border-radius: 10px;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 0.8rem;
+    }
+
+    th, td {
+      padding: 7px 10px;
+      border-bottom: 1px solid var(--border);
+      text-align: left;
+      font-family: var(--mono);
+    }
+
+    th {
+      position: sticky;
+      top: 0;
+      background: var(--panel-2);
+      color: var(--muted);
+      font-weight: 700;
+    }
+
+    .small-note {
+      font-size: 0.76rem;
+      color: var(--muted);
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <header>
+      <div>
+        <h1>Blackjack Prediction Lab — 8-Deck Shoe (416 Cards)</h1>
+        <p>Live shoe ledger, pre-lock next-card prediction scoring, and editable specialist research code (<code>predictNextCard(state)</code>)</p>
+      </div>
+      <div class="header-actions">
+        <button id="btnUndo">Undo Last Card</button>
+        <button id="btnResetShoe" class="danger">New 8-Deck Shoe</button>
+        <button id="btnExportJson">Export JSON</button>
+        <button id="btnExportCsv">Export CSV</button>
+        <button id="btnImportJson">Import JSON</button>
+        <input type="file" id="fileImport" accept=".json" style="display:none" />
+      </div>
+    </header>
+
+    <div class="rules-strip">
+      <span class="rule-pill">Shoe: <strong>8 Decks (416 Cards)</strong></span>
+      <span class="rule-pill">Blackjack: <strong>3 to 2</strong></span>
+      <span class="rule-pill">Win (&le;21): <strong>1 to 1</strong></span>
+      <span class="rule-pill">Insurance: <strong>2 to 1</strong> (TC &ge; +3)</span>
+      <span class="rule-pill">Even Money: <strong>1 to 1</strong></span>
+      <span class="rule-pill">Pair (Init 2): <strong>11 to 1</strong> (~7.47% base)</span>
+      <span class="rule-pill">Jackpot (Init 3: 6-7-8 / 7-7-7 Suited): <strong>3 to 1</strong> (~0.0191% base)</span>
+    </div>
+
+    <div class="grid-main">
+      <!-- Left Column: Shoe State & Card Input -->
+      <div class="card">
+        <div class="card-title">
+          <span>1. Live 8-Deck Composition &amp; Card Input</span>
+          <span id="shoeStatusBadge" class="badge badge-info">Fresh 8-Deck Shoe</span>
+        </div>
+
+        <div class="kpi-grid">
+          <div class="kpi">
+            <div class="label">Dealt / Left</div>
+            <div class="val" id="kpiDealtLeft">0 / 416</div>
+            <div class="sub" id="kpiPenetration">0.0% penetrated</div>
+          </div>
+          <div class="kpi">
+            <div class="label">Running Count</div>
+            <div class="val" id="kpiRC">0</div>
+            <div class="sub">Hi-Lo (-1: T/A, +1: 2-6)</div>
+          </div>
+          <div class="kpi">
+            <div class="label">True Count</div>
+            <div class="val" id="kpiTC">0.00</div>
+            <div class="sub" id="kpiDecksLeft">8.00 decks left</div>
+          </div>
+          <div class="kpi">
+            <div class="label">10s + Ace %</div>
+            <div class="val" id="kpiHighPct">38.46%</div>
+            <div class="sub" id="kpiLowPct">Low (2-6): 38.46%</div>
+          </div>
+        </div>
+
+        <div class="signal-box" style="margin-bottom: 14px;">
+          <div class="signal">
+            <div><strong>Insurance (2:1) / Even Money</strong></div>
+            <div style="margin-top:4px" id="sigInsurance"><span class="badge badge-bad">NO (TC &lt; +3)</span></div>
+          </div>
+          <div class="signal">
+            <div><strong>Pair Side Bet (11:1)</strong></div>
+            <div style="margin-top:4px" id="sigPair"><span class="badge badge-warn">BASE ~7.47%</span></div>
+          </div>
+          <div class="signal">
+            <div><strong>Jackpot 6-7-8 / 7-7-7 Suited (3:1)</strong></div>
+            <div style="margin-top:4px" id="sigJackpot"><span class="badge badge-bad">~0.0191% RAW</span></div>
+          </div>
+        </div>
+
+        <div class="quick-row">
+          <input type="text" id="seqInput" placeholder="Quick sequence e.g. Ks, 7d, Ac, 10h, 6s" />
+          <button id="btnAddSeq" class="primary">Deal Sequence</button>
+        </div>
+
+        <div id="deckMatrix" class="deck-matrix"></div>
+        <div class="small-note">Click any card above to record it as dealt in exact sequence (8 copies per exact card at start).</div>
+      </div>
+
+      <!-- Right Column: Pre-Lock Prediction & Accuracy Scoreboard -->
+      <div class="card">
+        <div class="card-title">
+          <span>2. Pre-Lock Next-Card Prediction &amp; Hit Tracker</span>
+          <button id="btnPredictNext" class="success">Predict Next Card</button>
+        </div>
+
+        <div class="prediction-banner">
+          <div class="small-note">Locked Prediction (must be generated BEFORE dealing the next card):</div>
+          <div class="prediction-main">
+            <div>
+              <div class="pred-pick" id="predExact">Awaiting Prediction</div>
+              <div class="small-note" id="predMeta">Click "Predict Next Card" to lock forecast for next dealt card.</div>
+            </div>
+            <span class="badge badge-info" id="predStatus">UNLOCKED</span>
+          </div>
+        </div>
+
+        <div class="score-grid">
+          <div class="kpi">
+            <div class="label">Exact Card Hit</div>
+            <div class="val" id="scoreExact">0 / 0</div>
+            <div class="sub" id="rateExact">0.0% (base ~1.92%)</div>
+          </div>
+          <div class="kpi">
+            <div class="label">Exact Rank Hit</div>
+            <div class="val" id="scoreRank">0 / 0</div>
+            <div class="sub" id="rateRank">0.0% (base ~7.69%)</div>
+          </div>
+          <div class="kpi">
+            <div class="label">Category Hit</div>
+            <div class="val" id="scoreCat">0 / 0</div>
+            <div class="sub" id="rateCat">0.0% (High/Neu/Low)</div>
+          </div>
+        </div>
+
+        <div class="small-note">
+          <strong>Note:</strong> In a fair, randomly shuffled 8-deck shoe, exact card prediction is probabilistic (~1.92% per exact card). High hit streaks indicate non-randomness, clumping, or known/repeated sequence patterns.
+        </div>
+      </div>
+    </div>
+
+    <!-- Editable Research Code Sandbox -->
+    <div class="card" style="margin-bottom: 16px;">
+      <div class="card-title">
+        <span>3. Editable Specialist Prediction Code (<code>predictNextCard(state)</code>)</span>
+        <div style="display:flex; flex-wrap:wrap; gap:6px;">
+          <button data-preset="composition">1. Card Counter (Hi-Lo + Remaining)</button>
+          <button data-preset="sequence">2. Shuffle / Key-Card Mirror</button>
+          <button data-preset="anomaly">3. Slug &amp; Side-Bet Auditor</button>
+          <button data-preset="ensemble">4. Team Ensemble Blend</button>
+        </div>
+      </div>
+
+      <textarea id="codeEditor" class="code-editor" spellcheck="false"></textarea>
+
+      <div style="display:flex; flex-wrap:wrap; gap:8px; margin-top:10px; align-items:center;">
+        <button id="btnApplyCode" class="primary">Apply &amp; Run Code</button>
+        <button id="btnResetCode">Reset Preset Code</button>
+        <span class="small-note">Return object shape: <code>{ exactCard, topRank, category, confidence, reason }</code></span>
+      </div>
+      <div id="codeStatus" class="code-status"></div>
+    </div>
+
+    <!-- Dealt History Log -->
+    <div class="card">
+      <div class="card-title">
+        <span>4. Dealt Card Sequence &amp; Prediction Log</span>
+        <span class="small-note" id="historyCount">0 cards logged</span>
+      </div>
+      <div class="history-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>#</th>
+              <th>Card</th>
+              <th>Hi-Lo</th>
+              <th>RC / TC</th>
+              <th>Locked Pred (Exact / Rank / Cat)</th>
+              <th>Result</th>
+            </tr>
+          </thead>
+          <tbody id="historyBody">
+            <tr><td colspan="6" style="color:var(--muted); text-align:center;">No cards dealt yet.</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const RANKS = ["A", "2", "3", "4", "5", "6", "7", "8", "9", "10", "J", "Q", "K"];
+    const SUITS = [
+      { sym: "♠", code: "s", red: false },
+      { sym: "♥", code: "h", red: true },
+      { sym: "♦", code: "d", red: true },
+      { sym: "♣", code: "c", red: false }
+    ];
+    const NUM_DECKS = 8;
+    const COPIES_PER_CARD = NUM_DECKS; // 8
+    const STORAGE_KEY = "bj_prediction_lab_v1";
+
+    const TABLE_RULES = {
+      decks: 8,
+      blackjackPayout: "3:2",
+      winPayout: "1:1",
+      insurancePayout: "2:1",
+      evenMoneyPayout: "1:1",
+      pairSideBetPayout: "11:1",
+      jackpotSideBetPayout: "3:1 (Init 3: 6-7-8 or 7-7-7 Suited)"
+    };
+
+    const PRESETS = {
+      composition: `// Role 1: Card Counter & Remaining Composition Model
+function predictNextCard(state) {
+  const entries = Object.entries(state.remainingByCard);
+  entries.sort((a, b) => b[1] - a[1]);
+  const [bestCode, bestCount] = entries[0];
+  const exactProb = state.cardsRemaining > 0 ? (bestCount / state.cardsRemaining) : 0;
+
+  // Rank remaining counts
+  const rankEntries = Object.entries(state.remainingByRank).sort((a, b) => b[1] - a[1]);
+  const [topRank] = rankEntries[0];
+
+  const highCount = ["10", "J", "Q", "K", "A"].reduce((s, r) => s + state.remainingByRank[r], 0);
+  const lowCount = ["2", "3", "4", "5", "6"].reduce((s, r) => s + state.remainingByRank[r], 0);
+  const neuCount = ["7", "8", "9"].reduce((s, r) => s + state.remainingByRank[r], 0);
+
+  let category = "Neutral (7-9)";
+  if (highCount >= lowCount && highCount >= neuCount) category = "High (10/A)";
+  else if (lowCount > highCount && lowCount >= neuCount) category = "Low (2-6)";
+
+  return {
+    exactCard: bestCode,
+    topRank,
+    category,
+    confidence: Math.min(95, Math.max(5, Math.round(exactProb * 100 * 25))),
+    reason: \`TC \${state.trueCount.toFixed(2)} | \${bestCode} has \${bestCount}/\${state.cardsRemaining} left\`
+  };
+}`,
+
+      sequence: `// Role 3: Shuffle Tracker & Key-Card Sequence Mirror
+function predictNextCard(state) {
+  const hist = state.history;
+  const fallback = PRESET_FALLBACK(state);
+  if (hist.length < 3) {
+    return { ...fallback, reason: "Need >= 3 dealt cards for sequence matching; using composition fallback." };
+  }
+
+  const lastRank = hist[hist.length - 1].rank;
+  const prevRank = hist[hist.length - 2].rank;
+
+  // Look for prior occurrences of (prevRank -> lastRank) and see what followed
+  const followerRankCounts = {};
+  const followerCardCounts = {};
+
+  for (let i = 1; i < hist.length - 1; i++) {
+    if (hist[i - 1].rank === prevRank && hist[i].rank === lastRank) {
+      const nextCard = hist[i + 1];
+      if (state.remainingByCard[nextCard.code] > 0) {
+        followerRankCounts[nextCard.rank] = (followerRankCounts[nextCard.rank] || 0) + 1;
+        followerCardCounts[nextCard.code] = (followerCardCounts[nextCard.code] || 0) + 1;
+      }
+    }
+  }
+
+  const matchedCards = Object.entries(followerCardCounts).sort((a, b) => b[1] - a[1]);
+  if (matchedCards.length > 0) {
+    const [predCard, hits] = matchedCards[0];
+    const predRank = predCard.slice(0, -1);
+    const cat = ["10", "J", "Q", "K", "A"].includes(predRank)
+      ? "High (10/A)"
+      : ["2", "3", "4", "5", "6"].includes(predRank) ? "Low (2-6)" : "Neutral (7-9)";
+    return {
+      exactCard: predCard,
+      topRank: predRank,
+      category: cat,
+      confidence: Math.min(90, 25 + hits * 20),
+      reason: \`Matched prior \${prevRank}->\${lastRank} sequence (\${hits}x) -> \${predCard}\`
+    };
+  }
+
+  return { ...fallback, reason: \`No repeat for \${prevRank}->\${lastRank} yet; composition fallback.\` };
+}`,
+
+      anomaly: `// Role 4: Game Protection & Side-Bet / Slug Anomaly Auditor
+function predictNextCard(state) {
+  const r6 = state.remainingByRank["6"];
+  const r7 = state.remainingByRank["7"];
+  const r8 = state.remainingByRank["8"];
+  const r10 = state.remainingByRank["10"];
+
+  // Highlight 6-7-8 / 7-7-7 or 10-heavy clusters for 11:1 Pair & 3:1 Jackpot rules
+  const targetRanks = [
+    { rank: "7", count: r7 },
+    { rank: "6", count: r6 },
+    { rank: "8", count: r8 },
+    { rank: "10", count: r10 }
+  ].sort((a, b) => b.count - a.count);
+
+  const topRank = targetRanks[0].rank;
+  const suitsOrder = ["♠", "♥", "♦", "♣"];
+  let bestCard = topRank + "♠";
+  let bestRem = -1;
+
+  for (const s of suitsOrder) {
+    const code = topRank + s;
+    const rem = state.remainingByCard[code] || 0;
+    if (rem > bestRem) {
+      bestRem = rem;
+      bestCard = code;
+    }
+  }
+
+  const category = topRank === "10" ? "High (10/A)" : "Neutral (7-9)";
+  return {
+    exactCard: bestCard,
+    topRank,
+    category,
+    confidence: Math.min(85, Math.round((bestRem / COPIES_PER_CARD) * 65)),
+    reason: \`Audit focus: 6s=\${r6}, 7s=\${r7}, 8s=\${r8}, 10s=\${r10} remaining\`
+  };
+}`,
+
+      ensemble: `// Role 2: Team Director Ensemble (Composition + Sequence + Count)
+function predictNextCard(state) {
+  const base = PRESET_FALLBACK(state);
+  const hist = state.history;
+  if (hist.length < 2) return base;
+
+  const lastRank = hist[hist.length - 1].rank;
+  const nextCounts = {};
+  for (let i = 0; i < hist.length - 1; i++) {
+    if (hist[i].rank === lastRank) {
+      const c = hist[i + 1].code;
+      if (state.remainingByCard[c] > 0) {
+        nextCounts[c] = (nextCounts[c] || 0) + 1;
+      }
+    }
+  }
+
+  const ranked = Object.entries(nextCounts).sort((a, b) => b[1] - a[1]);
+  if (ranked.length > 0 && ranked[0][1] >= 2) {
+    const exactCard = ranked[0][0];
+    const topRank = exactCard.slice(0, -1);
+    return {
+      exactCard,
+      topRank,
+      category: base.category,
+      confidence: Math.min(88, 30 + ranked[0][1] * 15),
+      reason: \`Ensemble: \${lastRank} followed by \${exactCard} \${ranked[0][1]} times\`
+    };
+  }
+
+  return { ...base, reason: \`Ensemble default: \${base.reason}\` };
+}`
+    };
+
+    function PRESET_FALLBACK(state) {
+      const entries = Object.entries(state.remainingByCard).sort((a, b) => b[1] - a[1]);
+      const [exactCard, bestCount] = entries[0];
+      const topRank = exactCard.slice(0, -1);
+      const highCount = ["10", "J", "Q", "K", "A"].reduce((s, r) => s + state.remainingByRank[r], 0);
+      const lowCount = ["2", "3", "4", "5", "6"].reduce((s, r) => s + state.remainingByRank[r], 0);
+      const category = highCount >= lowCount ? "High (10/A)" : "Low (2-6)";
+      return {
+        exactCard,
+        topRank,
+        category,
+        confidence: state.cardsRemaining > 0 ? Math.min(90, Math.max(10, Math.round((bestCount / state.cardsRemaining) * 2000))) : 0,
+        reason: `Top remaining ${exactCard} (${bestCount} left), TC ${state.trueCount.toFixed(2)}`
+      };
+    }
+
+    let appState = {
+      history: [], // { index, code, rank, suit, hiLo, lockedPrediction, graded }
+      lockedPrediction: null,
+      activePreset: "composition",
+      customCode: PRESETS.composition,
+      stats: {
+        totalGraded: 0,
+        exactHits: 0,
+        rankHits: 0,
+        catHits: 0
+      }
+    };
+
+    let compiledPredictor = null;
+
+    function compileCode(source) {
+      const helperFn = new Function("COPIES_PER_CARD", `
+        function PRESET_FALLBACK(state) {
+          const entries = Object.entries(state.remainingByCard).sort((a, b) => b[1] - a[1]);
+          const [exactCard, bestCount] = entries[0];
+          const topRank = exactCard.slice(0, -1);
+          const highCount = ["10", "J", "Q", "K", "A"].reduce((s, r) => s + state.remainingByRank[r], 0);
+          const lowCount = ["2", "3", "4", "5", "6"].reduce((s, r) => s + state.remainingByRank[r], 0);
+          const category = highCount >= lowCount ? "High (10/A)" : "Low (2-6)";
+          return {
+            exactCard,
+            topRank,
+            category,
+            confidence: state.cardsRemaining > 0 ? Math.min(90, Math.max(10, Math.round((bestCount / state.cardsRemaining) * 2000))) : 0,
+            reason: "Top remaining " + exactCard + " (" + bestCount + " left), TC " + state.trueCount.toFixed(2)
+          };
+        }
+        ${source}
+        if (typeof predictNextCard !== "function") {
+          throw new Error("Define predictNextCard(state)");
+        }
+        return predictNextCard;
+      `);
+      return helperFn(COPIES_PER_CARD);
+    }
+
+    function applyEditorCode(showSuccess = true) {
+      const statusEl = document.getElementById("codeStatus");
+      try {
+        const src = document.getElementById("codeEditor").value;
+        compiledPredictor = compileCode(src);
+        appState.customCode = src;
+        saveState();
+        if (showSuccess) {
+          statusEl.innerHTML = `<span class="badge badge-good">ACTIVE</span> Code compiled cleanly. Ready for predictions.`;
+        }
+      } catch (err) {
+        statusEl.innerHTML = `<span class="badge badge-bad">ERROR</span> ${err.message}`;
+      }
+    }
+
+    function getHiLoValue(rank) {
+      if (["2", "3", "4", "5", "6"].includes(rank)) return 1;
+      if (["10", "J", "Q", "K", "A"].includes(rank)) return -1;
+      return 0;
+    }
+
+    function getCategoryForRank(rank) {
+      if (["10", "J", "Q", "K", "A"].includes(rank)) return "High (10/A)";
+      if (["2", "3", "4", "5", "6"].includes(rank)) return "Low (2-6)";
+      return "Neutral (7-9)";
+    }
+
+    function buildShoeSnapshot() {
+      const remainingByCard = {};
+      const remainingByRank = {};
+      for (const r of RANKS) {
+        remainingByRank[r] = COPIES_PER_CARD * 4;
+        for (const s of SUITS) {
+          remainingByCard[r + s.sym] = COPIES_PER_CARD;
+        }
+      }
+
+      let runningCount = 0;
+      for (const item of appState.history) {
+        if (remainingByCard[item.code] > 0) {
+          remainingByCard[item.code] -= 1;
+        }
+        if (remainingByRank[item.rank] > 0) {
+          remainingByRank[item.rank] -= 1;
+        }
+        runningCount += item.hiLo;
+      }
+
+      const totalCards = 52 * NUM_DECKS;
+      const cardsDealt = appState.history.length;
+      const cardsRemaining = Math.max(0, totalCards - cardsDealt);
+      // Quarter-deck resolution (minimum 0.25 to avoid division by zero)
+      const rawDecksLeft = cardsRemaining / 52;
+      const decksRemaining = Math.max(0.25, Math.round(rawDecksLeft * 4) / 4);
+      const trueCount = runningCount / decksRemaining;
+
+      return {
+        history: appState.history,
+        remainingByCard,
+        remainingByRank,
+        totalCards,
+        cardsDealt,
+        cardsRemaining,
+        rawDecksLeft,
+        decksRemaining,
+        runningCount,
+        trueCount,
+        rules: TABLE_RULES
+      };
+    }
+
+    function parseCardToken(token) {
+      const clean = token.trim();
+      if (!clean) return null;
+      const upper = clean.toUpperCase();
+      let rankPart = "";
+      let suitPart = "";
+
+      if (upper.startsWith("10")) {
+        rankPart = "10";
+        suitPart = clean.slice(2).toLowerCase();
+      } else {
+        rankPart = upper.slice(0, 1);
+        suitPart = clean.slice(1).toLowerCase();
+      }
+
+      if (!RANKS.includes(rankPart)) return null;
+      const suitMap = { "♠": "♠", "s": "♠", "♥": "♥", "h": "♥", "♦": "♦", "d": "♦", "♣": "♣", "c": "♣" };
+      const sym = suitMap[suitPart];
+      if (!sym) return null;
+      return rankPart + sym;
+    }
+
+    function dealSingleCard(code) {
+      const snap = buildShoeSnapshot();
+      if (snap.cardsRemaining <= 0) {
+        alert("All 416 cards in the 8-deck shoe have been dealt. Start a New 8-Deck Shoe.");
+        return false;
+      }
+      if ((snap.remainingByCard[code] || 0) <= 0) {
+        alert(`No remaining copies of ${code} in this 8-deck shoe.`);
+        return false;
+      }
+
+      const rank = code.startsWith("10") ? "10" : code.slice(0, -1);
+      const suit = code.slice(-1);
+      const hiLo = getHiLoValue(rank);
+      const pred = appState.lockedPrediction;
+      let graded = null;
+
+      if (pred) {
+        const exactHit = pred.exactCard === code;
+        const rankHit = pred.topRank === rank;
+        const catHit = pred.category === getCategoryForRank(rank);
+        appState.stats.totalGraded += 1;
+        if (exactHit) appState.stats.exactHits += 1;
+        if (rankHit) appState.stats.rankHits += 1;
+        if (catHit) appState.stats.catHits += 1;
+        graded = { exactHit, rankHit, catHit };
+        appState.lockedPrediction = null;
+      }
+
+      appState.history.push({
+        index: appState.history.length + 1,
+        code,
+        rank,
+        suit,
+        hiLo,
+        rcAfter: snap.runningCount + hiLo,
+        tcAfter: (snap.runningCount + hiLo) / snap.decksRemaining,
+        lockedPrediction: pred,
+        graded
+      });
+
+      return true;
+    }
+
+    function lockNextPrediction() {
+      const snap = buildShoeSnapshot();
+      if (snap.cardsRemaining <= 0) {
+        alert("Shoe is empty. Start a New 8-Deck Shoe.");
+        return;
+      }
+      if (!compiledPredictor) applyEditorCode(false);
+      try {
+        const out = compiledPredictor(snap);
+        if (!out || !out.exactCard || !out.topRank || !out.category) {
+          throw new Error("predictNextCard must return { exactCard, topRank, category, confidence, reason }");
+        }
+        appState.lockedPrediction = {
+          exactCard: String(out.exactCard),
+          topRank: String(out.topRank),
+          category: String(out.category),
+          confidence: Number(out.confidence) || 0,
+          reason: String(out.reason || "")
+        };
+        saveState();
+        render();
+      } catch (err) {
+        document.getElementById("codeStatus").innerHTML = `<span class="badge badge-bad">RUNTIME ERROR</span> ${err.message}`;
+      }
+    }
+
+    function undoLastCard() {
+      if (appState.history.length === 0) return;
+      const popped = appState.history.pop();
+      if (popped.graded) {
+        appState.stats.totalGraded = Math.max(0, appState.stats.totalGraded - 1);
+        if (popped.graded.exactHit) appState.stats.exactHits = Math.max(0, appState.stats.exactHits - 1);
+        if (popped.graded.rankHit) appState.stats.rankHits = Math.max(0, appState.stats.rankHits - 1);
+        if (popped.graded.catHit) appState.stats.catHits = Math.max(0, appState.stats.catHits - 1);
+      }
+      appState.lockedPrediction = popped.lockedPrediction || null;
+      saveState();
+      render();
+    }
+
+    function resetShoe() {
+      appState.history = [];
+      appState.lockedPrediction = null;
+      appState.stats = { totalGraded: 0, exactHits: 0, rankHits: 0, catHits: 0 };
+      saveState();
+      render();
+    }
+
+    function saveState() {
+      try {
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(appState));
+      } catch (_) {}
+    }
+
+    function loadState() {
+      try {
+        const raw = localStorage.getItem(STORAGE_KEY);
+        if (raw) {
+          const parsed = JSON.parse(raw);
+          appState = { ...appState, ...parsed };
+        }
+      } catch (_) {}
+      document.getElementById("codeEditor").value = appState.customCode || PRESETS.composition;
+      applyEditorCode(false);
+    }
+
+    function render() {
+      const snap = buildShoeSnapshot();
+
+      // KPIs
+      const pen = ((snap.cardsDealt / snap.totalCards) * 100).toFixed(1);
+      document.getElementById("kpiDealtLeft").textContent = `${snap.cardsDealt} / ${snap.totalCards}`;
+      document.getElementById("kpiPenetration").textContent = `${pen}% penetrated`;
+      document.getElementById("kpiRC").textContent = (snap.runningCount >= 0 ? "+" : "") + snap.runningCount;
+      document.getElementById("kpiTC").textContent = (snap.trueCount >= 0 ? "+" : "") + snap.trueCount.toFixed(2);
+      document.getElementById("kpiDecksLeft").textContent = `${snap.decksRemaining.toFixed(2)} decks left`;
+
+      const highCount = ["10", "J", "Q", "K", "A"].reduce((s, r) => s + snap.remainingByRank[r], 0);
+      const lowCount = ["2", "3", "4", "5", "6"].reduce((s, r) => s + snap.remainingByRank[r], 0);
+      const tenOnly = snap.remainingByRank["10"];
+      const highPct = snap.cardsRemaining ? ((highCount / snap.cardsRemaining) * 100).toFixed(2) : "0.00";
+      const lowPct = snap.cardsRemaining ? ((lowCount / snap.cardsRemaining) * 100).toFixed(2) : "0.00";
+      const tenPct = snap.cardsRemaining ? ((tenOnly / snap.cardsRemaining) * 100).toFixed(2) : "0.00";
+
+      document.getElementById("kpiHighPct").textContent = `${highPct}%`;
+      document.getElementById("kpiLowPct").textContent = `Low (2-6): ${lowPct}%`;
+
+      const statusBadge = document.getElementById("shoeStatusBadge");
+      if (snap.cardsDealt === 0) {
+        statusBadge.className = "badge badge-info";
+        statusBadge.textContent = "Fresh 8-Deck Shoe";
+      } else if (snap.trueCount >= 3) {
+        statusBadge.className = "badge badge-good";
+        statusBadge.textContent = `HOT SHOE (TC +${snap.trueCount.toFixed(1)})`;
+      } else if (snap.trueCount <= -2) {
+        statusBadge.className = "badge badge-bad";
+        statusBadge.textContent = `COLD SHOE (TC ${snap.trueCount.toFixed(1)})`;
+      } else {
+        statusBadge.className = "badge badge-warn";
+        statusBadge.textContent = `IN PLAY (${snap.cardsRemaining} LEFT)`;
+      }
+
+      // Signals
+      document.getElementById("sigInsurance").innerHTML = snap.trueCount >= 3
+        ? `<span class="badge badge-good">TAKE (TC ${snap.trueCount.toFixed(2)} | 10s: ${tenPct}%)</span>`
+        : `<span class="badge badge-bad">PASS (TC ${snap.trueCount.toFixed(2)} | 10s: ${tenPct}%)</span>`;
+
+      const maxRankRem = Math.max(...Object.values(snap.remainingByRank));
+      const maxRankShare = snap.cardsRemaining ? (maxRankRem / snap.cardsRemaining) * 100 : 0;
+      document.getElementById("sigPair").innerHTML = maxRankShare > 8.333
+        ? `<span class="badge badge-good">+EV CLUSTER (${maxRankShare.toFixed(2)}%)</span>`
+        : `<span class="badge badge-warn">BASE ~7.47% (Max ${maxRankShare.toFixed(2)}%)</span>`;
+
+      const s6 = snap.remainingByRank["6"], s7 = snap.remainingByRank["7"], s8 = snap.remainingByRank["8"];
+      document.getElementById("sigJackpot").innerHTML =
+        `<span class="badge badge-bad">~0.0191% RAW</span> <span class="small-note">6s:${s6} 7s:${s7} 8s:${s8}</span>`;
+
+      // Deck Matrix
+      const matrix = document.getElementById("deckMatrix");
+      matrix.innerHTML = "";
+      for (const suit of SUITS) {
+        for (const rank of RANKS) {
+          const code = rank + suit.sym;
+          const rem = snap.remainingByCard[code];
+          const btn = document.createElement("button");
+          btn.className = "card-btn";
+          btn.disabled = rem <= 0;
+          btn.title = `Deal ${code} (${rem} left)`;
+          btn.innerHTML = `
+            <span class="c-name ${suit.red ? "suit-red" : "suit-black"}">${code}</span>
+            <span class="c-rem">${rem}</span>
+          `;
+          btn.addEventListener("click", () => {
+            if (dealSingleCard(code)) {
+              saveState();
+              render();
+            }
+          });
+          matrix.appendChild(btn);
+        }
+      }
+
+      // Prediction Banner
+      const lp = appState.lockedPrediction;
+      if (lp) {
+        document.getElementById("predExact").textContent = `${lp.exactCard}  ·  Rank ${lp.topRank}  ·  ${lp.category}`;
+        document.getElementById("predMeta").textContent = `Confidence: ${lp.confidence}% — ${lp.reason}`;
+        document.getElementById("predStatus").className = "badge badge-good";
+        document.getElementById("predStatus").textContent = "LOCKED FOR NEXT CARD";
+      } else {
+        document.getElementById("predExact").textContent = "Awaiting Prediction";
+        document.getElementById("predMeta").textContent = "Click \"Predict Next Card\" before dealing the next card.";
+        document.getElementById("predStatus").className = "badge badge-warn";
+        document.getElementById("predStatus").textContent = "UNLOCKED";
+      }
+
+      // Scoreboard
+      const g = appState.stats.totalGraded;
+      const pct = (n) => (g > 0 ? ((n / g) * 100).toFixed(1) : "0.0");
+      document.getElementById("scoreExact").textContent = `${appState.stats.exactHits} / ${g}`;
+      document.getElementById("rateExact").textContent = `${pct(appState.stats.exactHits)}% (base ~1.92%)`;
+
+      document.getElementById("scoreRank").textContent = `${appState.stats.rankHits} / ${g}`;
+      document.getElementById("rateRank").textContent = `${pct(appState.stats.rankHits)}% (base ~7.69%)`;
+
+      document.getElementById("scoreCat").textContent = `${appState.stats.catHits} / ${g}`;
+      document.getElementById("rateCat").textContent = `${pct(appState.stats.catHits)}% (High/Neu/Low)`;
+
+      // History Table
+      document.getElementById("historyCount").textContent = `${appState.history.length} cards logged`;
+      const tbody = document.getElementById("historyBody");
+      if (appState.history.length === 0) {
+        tbody.innerHTML = `<tr><td colspan="6" style="color:var(--muted); text-align:center;">No cards dealt yet.</td></tr>`;
+      } else {
+        tbody.innerHTML = [...appState.history].reverse().map(row => {
+          const predStr = row.lockedPrediction
+            ? `${row.lockedPrediction.exactCard} / ${row.lockedPrediction.topRank} / ${row.lockedPrediction.category}`
+            : `<span style="color:var(--muted)">— (not locked)</span>`;
+          let resBadge = `<span style="color:var(--muted)">—</span>`;
+          if (row.graded) {
+            if (row.graded.exactHit) resBadge = `<span class="badge badge-good">EXACT HIT</span>`;
+            else if (row.graded.rankHit) resBadge = `<span class="badge badge-info">RANK HIT</span>`;
+            else if (row.graded.catHit) resBadge = `<span class="badge badge-warn">CAT HIT</span>`;
+            else resBadge = `<span class="badge badge-bad">MISS</span>`;
+          }
+          const isRed = row.suit === "♥" || row.suit === "♦";
+          return `
+            <tr>
+              <td>${row.index}</td>
+              <td class="${isRed ? "suit-red" : "suit-black"}" style="font-weight:700">${row.code}</td>
+              <td>${row.hiLo > 0 ? "+1" : row.hiLo}</td>
+              <td>${row.rcAfter >= 0 ? "+" : ""}${row.rcAfter} / ${row.tcAfter.toFixed(2)}</td>
+              <td>${predStr}</td>
+              <td>${resBadge}</td>
+            </tr>
+          `;
+        }).join("");
+      }
+
+      document.getElementById("btnUndo").disabled = appState.history.length === 0;
+    }
+
+    // Event Listeners
+    document.getElementById("btnPredictNext").addEventListener("click", lockNextPrediction);
+    document.getElementById("btnUndo").addEventListener("click", undoLastCard);
+    document.getElementById("btnResetShoe").addEventListener("click", resetShoe);
+    document.getElementById("btnApplyCode").addEventListener("click", () => applyEditorCode(true));
+
+    document.getElementById("btnResetCode").addEventListener("click", () => {
+      const presetSrc = PRESETS[appState.activePreset] || PRESETS.composition;
+      document.getElementById("codeEditor").value = presetSrc;
+      applyEditorCode(true);
+    });
+
+    document.querySelectorAll("[data-preset]").forEach(btn => {
+      btn.addEventListener("click", () => {
+        const key = btn.getAttribute("data-preset");
+        if (PRESETS[key]) {
+          appState.activePreset = key;
+          document.getElementById("codeEditor").value = PRESETS[key];
+          applyEditorCode(true);
+        }
+      });
+    });
+
+    document.getElementById("btnAddSeq").addEventListener("click", () => {
+      const input = document.getElementById("seqInput");
+      const tokens = input.value.split(/[\s,]+/).filter(Boolean);
+      if (tokens.length === 0) return;
+
+      const parsed = [];
+      for (const t of tokens) {
+        const c = parseCardToken(t);
+        if (!c) {
+          alert(`Unrecognized card token: "${t}". Use formats like Ks, 7d, Ac, 10h, or K♠.`);
+          return;
+        }
+        parsed.push(c);
+      }
+
+      for (const c of parsed) {
+        if (!dealSingleCard(c)) break;
+      }
+      input.value = "";
+      saveState();
+      render();
+    });
+
+    document.getElementById("btnExportJson").addEventListener("click", () => {
+      const blob = new Blob([JSON.stringify(appState, null, 2)], { type: "application/json" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = "blackjack-prediction-session.json";
+      a.click();
+      URL.revokeObjectURL(url);
+    });
+
+    document.getElementById("btnExportCsv").addEventListener("click", () => {
+      const lines = ["index,card,rank,suit,hilo,rc_after,tc_after,pred_exact,pred_rank,pred_category,exact_hit,rank_hit,cat_hit"];
+      for (const r of appState.history) {
+        lines.push([
+          r.index,
+          r.code,
+          r.rank,
+          r.suit,
+          r.hiLo,
+          r.rcAfter,
+          r.tcAfter.toFixed(2),
+          r.lockedPrediction ? r.lockedPrediction.exactCard : "",
+          r.lockedPrediction ? r.lockedPrediction.topRank : "",
+          r.lockedPrediction ? `"${r.lockedPrediction.category}"` : "",
+          r.graded ? r.graded.exactHit : "",
+          r.graded ? r.graded.rankHit : "",
+          r.graded ? r.graded.catHit : ""
+        ].join(","));
+      }
+      const blob = new Blob([lines.join("\n")], { type: "text/csv" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = "blackjack-prediction-history.csv";
+      a.click();
+      URL.revokeObjectURL(url);
+    });
+
+    document.getElementById("btnImportJson").addEventListener("click", () => {
+      document.getElementById("fileImport").click();
+    });
+
+    document.getElementById("fileImport").addEventListener("change", (e) => {
+      const file = e.target.files[0];
+      if (!file) return;
+      const reader = new FileReader();
+      reader.onload = () => {
+        try {
+          const imported = JSON.parse(reader.result);
+          if (!Array.isArray(imported.history)) throw new Error("Invalid session JSON: missing history array.");
+          appState = { ...appState, ...imported };
+          document.getElementById("codeEditor").value = appState.customCode || PRESETS.composition;
+          applyEditorCode(true);
+          saveState();
+          render();
+        } catch (err) {
+          alert("Import failed: " + err.message);
+        }
+      };
+      reader.readAsText(file);
+      e.target.value = "";
+    });
+
+    loadState();
+    render();
+  </script>
+</body>
+</html>
