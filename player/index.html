@@ -110,6 +110,27 @@
       border-radius: 6px; padding: 3px 6px; font: inherit;
     }
     .load-detail { display: block; margin-top: 6px; font-size: 11px; line-height: 1.35; color: #cdbfa8; }
+    .timer-pill {
+      left: 50%; top: 78px; transform: translateX(-50%);
+      min-width: 168px; padding: 6px 14px; border-radius: 999px; text-align: center;
+      background: rgba(10, 7, 5, 0.82); border: 1px solid rgba(228, 190, 106, 0.45);
+      font: 800 13px var(--sans); letter-spacing: 0.04em; color: #fff8ec; z-index: 12;
+    }
+    .timer-pill[hidden] { display: none; }
+    .timer-pill.banker {
+      border-color: #9fe870; color: #9fe870;
+      box-shadow: 0 0 18px rgba(159, 232, 112, 0.35);
+      animation: bankerPulse 1s ease-in-out infinite;
+    }
+    .dealer-tag.signal {
+      border-color: #9fe870; color: #9fe870;
+      box-shadow: 0 0 22px rgba(159, 232, 112, 0.45);
+      animation: bankerPulse 1s ease-in-out infinite;
+    }
+    @keyframes bankerPulse {
+      0%, 100% { transform: translateX(-50%) scale(1); }
+      50% { transform: translateX(-50%) scale(1.04); }
+    }
     .dealer-tag {
       left: 50%; top: 38px; transform: translateX(-50%);
       padding: 3px 22px; border-radius: 8px;
@@ -482,7 +503,8 @@
             </div>
           </div>
 
-          <div class="dealer-tag">DEALER · ELIAS</div>
+          <div class="dealer-tag" id="dealerTag">DEALER · ELIAS</div>
+          <div class="timer-pill" id="timerPill" hidden>Betting · 18s</div>
           <div class="shoe-badge" id="shoeBadge"><span class="mini-back"></span><div><span id="shoeKind">Machine</span><strong id="shoeCount">0</strong></div></div>
           <div class="dealer-zone" aria-label="Dealer hand">
             <div class="cards-row" id="dealerCards"></div>
@@ -541,8 +563,9 @@
         <li>Double on any first two cards, split once</li>
         <li>Live deals the Blackjack Live Table sequence. Machine deals the e Blackjack shoe set on the mechanic page.</li>
         <li>Open the page to watch. Tap Sit only if you want to play. Alone is single player; more seated players share the table.</li>
+        <li>Players bet only. Banker Elias shows a countdown, then a deal signal, then deals automatically.</li>
       </ul>
-      <p>Shortcuts: H hit, S stand, D double, P split, Space deal / next round, 1-4 chips.</p>
+      <p>Shortcuts: H hit, S stand, D double, P split, Space next round, 1-4 chips.</p>
       <div class="row"><button class="btn primary" type="button" id="rulesClose">Back to the table</button></div>
     </div>
   </div>
@@ -603,6 +626,10 @@
       shoeLen: 0,
       version: 0,
       deadline: 0,
+      timerKind: "",
+      bankerSignal: false,
+      serverNow: 0,
+      clockSkew: 0,
       spot: "main",
       chip: 25,
       selected: 2,
@@ -773,6 +800,37 @@
       if (kind) kind.textContent = state.loadMode === "machine" ? "Machine" : "Live";
     }
 
+    function secondsLeft() {
+      if (!state.deadline) return 0;
+      const localDeadline = (state.deadline * 1000) + state.clockSkew;
+      return Math.max(0, Math.ceil((localDeadline - Date.now()) / 1000));
+    }
+
+    function paintTimer() {
+      const pill = document.getElementById("timerPill");
+      const tag = document.getElementById("dealerTag");
+      if (!pill || !tag) return;
+      const left = secondsLeft();
+      const kind = state.timerKind || "";
+      const signal = !!state.bankerSignal || kind === "banker" || state.phase === "dealer";
+      tag.classList.toggle("signal", signal);
+      tag.textContent = signal ? "BANKER SIGNAL · ELIAS" : "DEALER · ELIAS";
+      let label = "";
+      if (kind === "betting" && state.deadline) label = `Betting closes · ${left}s`;
+      else if (kind === "banker" || signal) label = left > 0 ? `Banker signal · ${left}s` : "Banker signal · dealing";
+      else if (kind === "insurance" && state.deadline) label = `Insurance · ${left}s`;
+      else if (kind === "turn" && state.deadline) label = `Player turn · ${left}s`;
+      else if (kind === "next" && state.deadline) label = `Next round · ${left}s`;
+      if (!label) {
+        pill.hidden = true;
+        pill.classList.remove("banker");
+        return;
+      }
+      pill.hidden = false;
+      pill.classList.toggle("banker", signal || kind === "banker");
+      pill.textContent = label;
+    }
+
     /* ---------- network ---------- */
     let lastRenderVersion = -1;
     let flashUntil = 0;
@@ -804,7 +862,11 @@
       state.shoeLeft = s.shoeLeft;
       state.shoeLen = s.shoeLen;
       state.version = s.version;
-      state.deadline = s.deadline;
+      state.deadline = s.deadline || 0;
+      state.timerKind = s.timerKind || "";
+      state.bankerSignal = !!s.bankerSignal;
+      state.serverNow = s.serverNow || 0;
+      if (state.serverNow) state.clockSkew = Date.now() - (state.serverNow * 1000);
       if (Date.now() > flashUntil) { state.main = s.main; state.sub = s.sub; }
       const mine = state.seats.findIndex((se) => se.occupied && se.playerId === myId);
       state.mySeat = mine;
@@ -1144,6 +1206,7 @@
       document.getElementById("shoeCount").textContent = String(shoeCount);
       document.getElementById("infoShoe").textContent = String(shoeCount);
       paintLoadSource();
+      paintTimer();
       if (showServerCopy || !state.connected) {
         document.getElementById("bannerMain").textContent = state.main;
         document.getElementById("bannerSub").textContent = state.sub;
@@ -1208,11 +1271,14 @@
           { disabled: true, big: true }
         );
       } else if (state.phase === "betting") {
-        const ready = bettingSeats().length > 0;
+        const left = secondsLeft();
+        const waiting = state.bankerSignal
+          ? "Banker signal"
+          : (state.deadline ? `Banker in ${left}s` : "Bet · wait for banker");
         actions =
-          rbtn("clear", "Clear", icons.clear, "", { disabled: false }) +
-          rbtn("rebet", "Repeat", icons.repeat, "", { disabled: false }) +
-          rbtn("deal", "Deal", icons.check, "green", { big: true, disabled: !ready, pulse: ready }) +
+          rbtn("clear", "Clear", icons.clear, "", { disabled: !!state.bankerSignal }) +
+          rbtn("rebet", "Repeat", icons.repeat, "", { disabled: !!state.bankerSignal }) +
+          rbtn("wait", waiting, icons.check, state.bankerSignal ? "green" : "", { big: true, disabled: true, pulse: !!state.bankerSignal }) +
           rbtn("rebuy", "Rebuy", icons.plus, "gold", { disabled: false }) +
           rbtn("leave", "Leave", icons.leave, "", { disabled: false });
       } else if (state.phase === "insurance") {
@@ -1285,6 +1351,7 @@
         state.spot = spot.dataset.spot;
         if (isMine(seatIndex)) {
           if (state.phase !== "betting") { flashNote("Bet between hands", "Wait for the next round."); return; }
+          if (state.bankerSignal) { flashNote("Banker signal", "No more bets. Dealer Elias is dealing."); return; }
           play("chip");
           sendAction("bet", { seat: seatIndex, spot: state.spot, chip: state.chip });
         } else {
@@ -1316,7 +1383,7 @@
       else if (action === "rebet") { play("chip"); sendAction("rebet", { seat: betTarget }); }
       else if (action === "rebuy") { play("chip"); sendAction("rebuy", { seat: betTarget }); }
       else if (action === "leave") sendAction("leave", { seat: betTarget });
-      else if (action === "deal") { play("chip"); sendAction("deal"); }
+      else if (action === "deal") { flashNote("Banker deals", "Place your bet and wait for the banker signal."); }
       else if (action === "insure") { play("chip"); sendAction("insure"); }
       else if (action === "even") { play("chip"); sendAction("even"); }
       else if (action === "decline") sendAction("decline");
@@ -1404,7 +1471,7 @@
       else if (key === "p") press('[data-act="split"]');
       else if (key === " " || key === "enter") {
         if (tag === "button") return;
-        press('[data-act="deal"], [data-act="next"]');
+        press('[data-act="next"]');
       }
       else if (["1", "2", "3", "4"].includes(key)) press(`[data-chip="${[25, 100, 500, 1000][Number(key) - 1]}"]`);
     });
@@ -1462,6 +1529,7 @@
     render();
     getState();
     setInterval(getState, 1000);
+    setInterval(paintTimer, 250);
 
   </script>
 </body>

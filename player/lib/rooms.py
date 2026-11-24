@@ -26,6 +26,9 @@ BUY_IN = 2500
 MIN_BET = 25
 MAX_BET = 1000
 
+BET_SECS = 18       # multiplayer betting window after the first main bet
+SOLO_BET_SECS = 8   # shorter window when only one player is seated
+BANKER_SECS = 2     # banker signal before the auto-deal
 TURN_SECS = 45      # auto-stand an idle player's hand
 INS_SECS = 30       # auto-decline an idle insurance decision
 SETTLE_SECS = 25    # auto-advance to the next betting round
@@ -265,6 +268,8 @@ def new_room(room_id):
         "pendingFeed": None,
         "version": 1,
         "deadline": 0,
+        "timerKind": "",
+        "bankerSignal": False,
         "players": {},
     }
 
@@ -381,8 +386,73 @@ def betting_seats(room):
     return out
 
 
+def occupied_seats(room):
+    return [i for i, seat in enumerate(room["seats"]) if seat["occupied"]]
+
+
+def all_seated_ready(room):
+    seated = occupied_seats(room)
+    if not seated:
+        return False
+    return all(room["seats"][i]["bet"] >= MIN_BET for i in seated)
+
+
 def wager(seat):
     return seat["bet"] + seat["pairBet"] + seat["jackpotBet"]
+
+
+def clear_bet_timer(room):
+    if room["phase"] == "betting":
+        room["deadline"] = 0
+        room["timerKind"] = ""
+        room["bankerSignal"] = False
+
+
+def arm_bet_timer(room):
+    """Start or refresh the betting countdown after a main bet is in play."""
+    if room["phase"] != "betting" or not betting_seats(room):
+        clear_bet_timer(room)
+        return
+    seated = len(occupied_seats(room))
+    window = SOLO_BET_SECS if seated <= 1 else BET_SECS
+    now = time.time()
+    if not room["deadline"] or room["timerKind"] not in ("betting", "banker"):
+        room["deadline"] = now + window
+        room["timerKind"] = "betting"
+        room["bankerSignal"] = False
+        say(
+            room,
+            "Betting open",
+            f"Banker Elias deals in {window}s, or sooner when every seated player has a main bet.",
+        )
+    if all_seated_ready(room):
+        # Everyone ready: banker signal, then deal.
+        room["deadline"] = min(room["deadline"] or (now + BANKER_SECS), now + BANKER_SECS)
+        room["timerKind"] = "banker"
+        room["bankerSignal"] = True
+        say(room, "Banker signal", "No more bets. Dealer Elias is dealing.")
+
+
+def banker_deal(room):
+    if room["phase"] != "betting":
+        return False
+    if not betting_seats(room):
+        clear_bet_timer(room)
+        say(room, "Place your bets", "The banker waits for at least one main bet.")
+        return False
+    room["bankerSignal"] = True
+    room["timerKind"] = "banker"
+    say(room, "Banker signal", "No more bets. Dealer Elias is dealing.")
+    deal_round(room)
+    if room["phase"] != "betting":
+        room["bankerSignal"] = False
+        if room["phase"] == "acting":
+            room["timerKind"] = "turn"
+        elif room["phase"] == "insurance":
+            room["timerKind"] = "insurance"
+        else:
+            room["timerKind"] = ""
+    return True
 
 
 def cards_left(room):
@@ -524,6 +594,8 @@ def deal_round(room):
         room["phase"] = "insurance"
         room["insuranceAt"] = 0
         room["deadline"] = time.time() + INS_SECS
+        room["timerKind"] = "insurance"
+        room["bankerSignal"] = False
         ask_insurance(room)
     elif up in ("10", "J", "Q", "K"):
         finish_peek(room)
@@ -559,6 +631,7 @@ def advance_insurance(room):
         finish_peek(room)
     else:
         room["deadline"] = time.time() + INS_SECS
+        room["timerKind"] = "insurance"
         ask_insurance(room)
 
 
@@ -594,6 +667,8 @@ def next_actor(room):
                 room["activeSeat"] = index
                 room["activeHand"] = h
                 room["deadline"] = time.time() + TURN_SECS
+                room["timerKind"] = "turn"
+                room["bankerSignal"] = False
                 label = f" hand {h + 1}" if len(seat["hands"]) > 1 else ""
                 say(room, f"{seat['name']}{label}", "Hit, stand, double, or split.")
                 return True
@@ -611,6 +686,9 @@ def after_player_action(room):
 def play_dealer(room):
     room["phase"] = "dealer"
     room["holeHidden"] = False
+    room["timerKind"] = "banker"
+    room["bankerSignal"] = True
+    room["deadline"] = 0
     live = any(
         any(hand["status"] not in ("bust", "even") for hand in room["seats"][i]["hands"])
         for i in betting_seats(room)
@@ -629,6 +707,8 @@ def settle_all(room):
     room["phase"] = "settled"
     room["activeSeat"] = None
     room["deadline"] = time.time() + SETTLE_SECS
+    room["timerKind"] = "next"
+    room["bankerSignal"] = False
     dealer_total = hand_value(room["dealer"])
     dealer_blackjack = len(room["dealer"]) == 2 and dealer_total == 21
     notes = []
@@ -682,8 +762,10 @@ def next_round(room):
     room["phase"] = "betting"
     room["activeSeat"] = None
     room["deadline"] = 0
+    room["timerKind"] = ""
+    room["bankerSignal"] = False
     flush_pending_feed(room)
-    say(room, "Place your bets", "Every seated player sets a bet. Seats without a bet sit this hand out.")
+    say(room, "Place your bets", "The banker deals when the timer ends, or when every seated player has a main bet.")
 
 
 # ------------------------- timeouts + presence -------------------------
@@ -693,6 +775,13 @@ def tick(room):
     now = time.time()
     for _ in range(30):
         phase = room["phase"]
+        if phase == "betting" and room["deadline"] and now > room["deadline"]:
+            if betting_seats(room):
+                banker_deal(room)
+                bump(room)
+            else:
+                clear_bet_timer(room)
+            continue
         if phase == "insurance" and room["deadline"] and now > room["deadline"]:
             advance_insurance(room)
             continue
@@ -703,6 +792,7 @@ def tick(room):
             continue
         if phase == "settled" and room["deadline"] and now > room["deadline"]:
             next_round(room)
+            bump(room)
             continue
         break
     # Free seats of players who stopped polling, but only while nobody is mid-hand.
@@ -713,6 +803,8 @@ def tick(room):
                 last = room["players"].get(pid, 0)
                 if now - last > IDLE_SECS:
                     room["seats"][room["seats"].index(seat)] = empty_seat()
+        if room["phase"] == "betting" and not betting_seats(room):
+            clear_bet_timer(room)
 
 
 def touch(room, player_id):
@@ -780,6 +872,8 @@ def do_action(room, body):
             return False, "That is not your seat."
         seat = room["seats"][index]
         if action == "bet":
+            if room.get("bankerSignal"):
+                return False, "Banker signal is on. No more bets."
             spot = body.get("spot", "main")
             chip = int(body.get("chip", 0))
             if chip not in (25, 100, 500, 1000):
@@ -790,33 +884,38 @@ def do_action(room, body):
             if wager(seat) + chip > seat["bankroll"]:
                 return False, "That is more than your chips."
             seat[key] += chip
-            say(room, f"Betting for {seat['name']}", "Main bet at least $25, then Deal.")
+            say(room, f"Betting for {seat['name']}", "Main bet at least $25. Wait for the banker signal.")
+            if seat["bet"] >= MIN_BET:
+                arm_bet_timer(room)
         elif action == "clear":
             clear_bets(seat)
+            if not betting_seats(room):
+                clear_bet_timer(room)
+                say(room, "Place your bets", "The banker waits for at least one main bet.")
         elif action == "rebet":
+            if room.get("bankerSignal"):
+                return False, "Banker signal is on. No more bets."
             clear_bets(seat)
             wanted = seat["lastBet"] + seat["lastPair"] + seat["lastJackpot"]
             if MIN_BET <= wanted <= seat["bankroll"]:
                 seat["bet"] = seat["lastBet"]
                 seat["pairBet"] = seat["lastPair"]
                 seat["jackpotBet"] = seat["lastJackpot"]
+                if seat["bet"] >= MIN_BET:
+                    arm_bet_timer(room)
         elif action == "rebuy":
             seat["bankroll"] += BUY_IN
             say(room, f"{seat['name']} rebuys", "Fresh chips added.")
         elif action == "leave":
             room["seats"][index] = empty_seat()
             say(room, "Seat open", "Another player can sit there.")
+            if not betting_seats(room):
+                clear_bet_timer(room)
         bump(room)
         return True, ""
 
     if action == "deal":
-        if room["phase"] != "betting":
-            return False, "The hand already started."
-        if not betting_seats(room):
-            return False, "Place a main bet first."
-        deal_round(room)
-        bump(room)
-        return True, ""
+        return False, "Players do not deal. Place your bet and wait for the banker signal."
 
     if action in ("insure", "even", "decline"):
         if room["phase"] != "insurance":
@@ -943,6 +1042,9 @@ def public_state(room):
         "shoeLen": len(room["feed"]),
         "version": room["version"],
         "deadline": room["deadline"],
+        "timerKind": room.get("timerKind") or "",
+        "bankerSignal": bool(room.get("bankerSignal")),
+        "serverNow": time.time(),
     }
 
 
