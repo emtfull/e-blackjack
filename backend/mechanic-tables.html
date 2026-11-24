@@ -100,7 +100,7 @@
     <header>
       <div>
         <h1>e Blackjack</h1>
-        <p>Tables 2–6. Each shoe is built by a deterministic 5-agent mechanic system — 8 decks, 416 cards, no random shuffle. Blackjack Live Table stays on the prediction input.</p>
+        <p>Tables 2–6. Each shoe is built by the 5-agent mechanic system — 8 decks, 416 cards. Leave the seed empty and Generate makes a new order. Blackjack Live Table stays on the prediction input.</p>
       </div>
       <div class="links">
         <a href="/">Prediction Lab</a>
@@ -120,17 +120,17 @@
       </label>
       <label style="color:var(--muted); font-size:0.85rem; display:flex; align-items:center; gap:6px;">
         Seed (optional)
-        <input id="seedInput" type="text" placeholder="auto: profile:tableN" style="min-width:180px;" />
+        <input id="seedInput" type="text" placeholder="empty = new shoe each click" style="min-width:220px;" />
       </label>
       <button id="btnBuildAll" class="primary">Build all 5 shoes</button>
     </div>
     <p class="status" id="statusLine">Loading e Blackjack shoes…</p>
     <p class="note">
-      <strong>Note:</strong> These shoes are not shuffled at random. Each table’s 416 cards
-      (8 decks, eight of every card) come from a deterministic 5-agent mechanic system, so the
-      same profile and seed always rebuild the identical shoe. Run python3 serve.py 8080
-      for this page. The official table loads these shoes when the player chooses Machine.
-      Blackjack Live Table stays on its own sequence and is the Live choice.
+      <strong>Note:</strong> Each shoe is still a legal 416-card pack from the same 5-agent chain.
+      Leave Seed empty and every Generate click mints a new seed, so the order changes.
+      Type a seed when you want that exact shoe again — the same profile and seed always
+      rebuild the identical order. The official table loads these shoes when the player
+      chooses Machine. Blackjack Live Table stays on its own sequence and is the Live choice.
     </p>
     <div class="grid" id="tableGrid"></div>
   </div>
@@ -255,6 +255,16 @@
       scarne:  { passes: 4, slugRanks: ["10", "J", "Q", "K"],      switchEvery: 23, cutDepth: 0.80, csm: true },
     };
 
+    function freshSeed() {
+      const bytes = new Uint32Array(2);
+      if (window.crypto && crypto.getRandomValues) crypto.getRandomValues(bytes);
+      else {
+        bytes[0] = Math.floor(Math.random() * 4294967296);
+        bytes[1] = Date.now() >>> 0;
+      }
+      return `deal-${Date.now().toString(36)}-${(bytes[0] >>> 0).toString(36)}${(bytes[1] >>> 0).toString(36)}`;
+    }
+
     function historian(tableNumber, profileName, seedOverride) {
       const name = PROFILES[profileName] ? profileName : "erdnase";
       const base = PROFILES[name];
@@ -273,7 +283,7 @@
       deck = playerMechanic(deck, rng, cfg);
       deck = gameProtection(deck, rng, cfg);
       assertLegalShoe(deck);
-      return deck;
+      return { deck, seed: cfg.seed };
     }
 
     // Guarantee a legal shoe: 416 cards, exactly 8 of every one of the 52 cards.
@@ -308,16 +318,20 @@
       try {
         const parsed = JSON.parse(localStorage.getItem(STORAGE_KEY) || "null");
         const tables = (parsed && parsed.tables) || {};
+        const seeds = (parsed && parsed.seeds) || {};
         const next = emptyTables();
+        const nextSeeds = {};
         let complete = true;
         TABLE_NUMBERS.forEach((n) => {
           const shoe = tables[n] || tables[String(n)];
           if (Array.isArray(shoe) && shoe.length === 416) next[String(n)] = shoe.slice();
           else complete = false;
+          const seed = seeds[n] || seeds[String(n)];
+          if (seed) nextSeeds[String(n)] = String(seed);
         });
-        return { tables: next, complete };
+        return { tables: next, seeds: nextSeeds, complete };
       } catch (_) {
-        return { tables: emptyTables(), complete: false };
+        return { tables: emptyTables(), seeds: {}, complete: false };
       }
     }
 
@@ -337,11 +351,12 @@
       } catch (_) {}
     }
 
-    function saveStore(tables) {
-      const payload = { tables, updatedAt: new Date().toISOString() };
+    function saveStore(tables, seeds) {
+      const updatedAt = new Date().toISOString();
+      const payload = { tables, seeds: seeds || {}, updatedAt };
       localStorage.setItem(STORAGE_KEY, JSON.stringify(payload));
       if (channel) channel.postMessage({ type: "casino", count: 5 });
-      publishSources({ machine: payload });
+      publishSources({ machine: { tables, updatedAt } });
     }
 
     function paintCard(code) {
@@ -350,35 +365,42 @@
     }
 
     function render() {
-      const { tables, complete } = readStore();
+      const { tables, seeds, complete } = readStore();
       const grid = document.getElementById("tableGrid");
       document.getElementById("statusLine").textContent = complete
-        ? "e Blackjack 2–6 each have a 416-card mechanic shoe. The player felt reads these shoes."
-        : "Build the five shoes. Each one is a deterministic 416-card mechanic shoe, eight of every rank and suit.";
+        ? "e Blackjack 2–6 each have a 416-card mechanic shoe. Leave the seed empty and Generate makes a new order."
+        : "Build the five shoes. Each one is a 416-card mechanic shoe, eight of every rank and suit.";
       grid.innerHTML = TABLE_NUMBERS.map((n) => {
         const shoe = tables[String(n)] || [];
+        const seed = seeds[String(n)] || "";
         const preview = shoe.length
           ? shoe.slice(0, 18).map(paintCard).join(" ")
           : "No shoe yet";
         return `
           <article class="card">
             <h2>e Blackjack ${n}</h2>
-            <div class="meta">${shoe.length ? shoe.length + " / 416 cards" : "Empty"}</div>
+            <div class="meta">${shoe.length ? shoe.length + " / 416 cards" : "Empty"}${seed ? " · " + seed : ""}</div>
             <div class="preview">${preview}</div>
-            <button type="button" data-regenerate="${n}">Regenerate this shoe</button>
+            <button type="button" data-regenerate="${n}">Generate new shoe</button>
           </article>`;
       }).join("");
     }
 
     function buildAllTables(profile, seed) {
       const tables = emptyTables();
-      TABLE_NUMBERS.forEach((n) => { tables[String(n)] = buildMechanicShoe(n, profile, seed); });
-      return tables;
+      const seeds = {};
+      const shared = (seed && String(seed).trim()) ? String(seed).trim() : freshSeed();
+      TABLE_NUMBERS.forEach((n) => {
+        const built = buildMechanicShoe(n, profile, shared);
+        tables[String(n)] = built.deck;
+        seeds[String(n)] = built.seed;
+      });
+      return { tables, seeds };
     }
 
     document.getElementById("btnBuildAll").addEventListener("click", () => {
-      const tables = buildAllTables(currentProfile(), currentSeed());
-      saveStore(tables);
+      const built = buildAllTables(currentProfile(), currentSeed());
+      saveStore(built.tables, built.seeds);
       render();
     });
 
@@ -386,15 +408,19 @@
       const button = event.target.closest("[data-regenerate]");
       if (!button) return;
       const n = Number(button.dataset.regenerate);
-      const { tables } = readStore();
-      tables[String(n)] = buildMechanicShoe(n, currentProfile(), currentSeed());
-      saveStore(tables);
+      const stored = readStore();
+      const typed = currentSeed().trim();
+      const built = buildMechanicShoe(n, currentProfile(), typed || freshSeed());
+      stored.tables[String(n)] = built.deck;
+      stored.seeds[String(n)] = built.seed;
+      saveStore(stored.tables, stored.seeds);
       render();
     });
 
     const initial = readStore();
     if (!initial.complete) {
-      saveStore(buildAllTables(currentProfile(), currentSeed()));
+      const built = buildAllTables(currentProfile(), currentSeed());
+      saveStore(built.tables, built.seeds);
     } else {
       publishSources({ machine: { tables: initial.tables, updatedAt: new Date().toISOString() } });
     }
