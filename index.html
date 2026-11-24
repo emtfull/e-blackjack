@@ -411,6 +411,27 @@
       min-height: 20px;
     }
 
+    .trigger-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      align-items: center;
+      margin-top: 10px;
+    }
+
+    .trigger-toggle {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      background: var(--panel-2);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 6px 10px;
+      font-size: 0.78rem;
+      font-weight: 700;
+      letter-spacing: 0.03em;
+    }
+
     .history-wrap {
       max-height: 300px;
       overflow-y: auto;
@@ -604,6 +625,7 @@
           <button data-preset="sequence">2. Shuffle / Key-Card Mirror</button>
           <button data-preset="anomaly">3. Slug &amp; Side-Bet Auditor</button>
           <button data-preset="ensemble">4. Team Ensemble Blend</button>
+          <button data-preset="qrp">5. QRP Trigger Bias</button>
         </div>
       </div>
 
@@ -613,6 +635,13 @@
         <button id="btnApplyCode" class="primary">Apply &amp; Run Code</button>
         <button id="btnResetCode">Reset Preset Code</button>
         <span class="small-note">Return object shape: <code>{ exactCard, topRank, category, confidence, reason }</code></span>
+      </div>
+      <div class="trigger-row">
+        <span class="small-note">QRP triggers for preset 5</span>
+        <label class="trigger-toggle"><input type="checkbox" id="trigSplit" data-trigger="split" /> SPLIT</label>
+        <label class="trigger-toggle"><input type="checkbox" id="trigTimeout" data-trigger="timeout" /> TIMEOUT</label>
+        <label class="trigger-toggle"><input type="checkbox" id="trigMaint" data-trigger="maint" /> MAINT</label>
+        <span class="small-note">Any checked trigger gives 10, J, Q, K, and Ace a 1.5× weight. Click Predict Next Card again after a change.</span>
       </div>
       <div id="codeStatus" class="code-status"></div>
     </div>
@@ -784,6 +813,67 @@ function predictNextCard(state) {
   }
 
   return { ...base, reason: \`Ensemble default: \${base.reason}\` };
+}`,
+
+      qrp: `// Role 5: QRP Trigger Bias (SPLIT / TIMEOUT / MAINT)
+// Shoe counts come from state.remainingByRank, not state["A"].
+// Any trigger multiplies 10/J/Q/K/A by 1.5 before the rank is chosen.
+function predictNextCard(state) {
+  const triggers = state.triggers || { split: false, timeout: false, maint: false };
+  const ranks = ["2", "3", "4", "5", "6", "7", "8", "9", "10", "J", "Q", "K", "A"];
+  const high = { "10": true, "J": true, "Q": true, "K": true, "A": true };
+  const suits = ["♠", "♥", "♦", "♣"];
+  let totalRemaining = 0;
+  const counts = {};
+  for (const rank of ranks) {
+    counts[rank] = (state.remainingByRank && state.remainingByRank[rank]) || 0;
+    totalRemaining += counts[rank];
+  }
+  if (totalRemaining === 0) {
+    return { exactCard: "A♠", topRank: "A", category: "High (10/A)", confidence: 0, reason: "Shoe empty" };
+  }
+  const boost = (triggers.split || triggers.timeout || triggers.maint) ? 1.5 : 1.0;
+  let totalWeighted = 0;
+  const weighted = {};
+  for (const rank of ranks) {
+    const weight = counts[rank] * (high[rank] ? boost : 1);
+    weighted[rank] = weight;
+    totalWeighted += weight;
+  }
+  let predictedRank = ranks[0];
+  let maxProb = -1;
+  for (const rank of ranks) {
+    const prob = totalWeighted > 0 ? weighted[rank] / totalWeighted : 0;
+    if (prob > maxProb) {
+      maxProb = prob;
+      predictedRank = rank;
+    }
+  }
+  let exactCard = predictedRank + suits[0];
+  let bestRem = -1;
+  for (const suit of suits) {
+    const code = predictedRank + suit;
+    const rem = (state.remainingByCard && state.remainingByCard[code]) || 0;
+    if (rem > bestRem) {
+      bestRem = rem;
+      exactCard = code;
+    }
+  }
+  let category = "Low (2-6)";
+  if (high[predictedRank]) category = "High (10/A)";
+  else if (predictedRank === "7" || predictedRank === "8" || predictedRank === "9") category = "Neutral (7-9)";
+  const active = [];
+  if (triggers.split) active.push("SPLIT");
+  if (triggers.timeout) active.push("TIMEOUT");
+  if (triggers.maint) active.push("MAINT");
+  const pct = Math.round(maxProb * 10000) / 100;
+  return {
+    exactCard: exactCard,
+    topRank: predictedRank,
+    category: category,
+    confidence: pct,
+    reason: (active.length ? "QRP " + active.join("+") + " boost " + boost + "x | " : "Baseline, no QRP trigger | ") + predictedRank + " weighted " + pct + "% (" + counts[predictedRank] + " left)"
+  };
 }`
     };
 
@@ -808,6 +898,7 @@ function predictNextCard(state) {
       lockedPrediction: null,
       activePreset: "composition",
       customCode: PRESETS.composition,
+      triggers: { split: false, timeout: false, maint: false },
       stats: {
         totalGraded: 0,
         exactHits: 0,
@@ -911,7 +1002,12 @@ function predictNextCard(state) {
         decksRemaining,
         runningCount,
         trueCount,
-        rules: TABLE_RULES
+        rules: TABLE_RULES,
+        triggers: {
+          split: !!(appState.triggers && appState.triggers.split),
+          timeout: !!(appState.triggers && appState.triggers.timeout),
+          maint: !!(appState.triggers && appState.triggers.maint)
+        }
       };
     }
 
@@ -1043,8 +1139,20 @@ function predictNextCard(state) {
           appState = { ...appState, ...parsed };
         }
       } catch (_) {}
+      if (!appState.triggers) appState.triggers = { split: false, timeout: false, maint: false };
       document.getElementById("codeEditor").value = appState.customCode || PRESETS.composition;
+      syncTriggerInputs();
       applyEditorCode(false);
+    }
+
+    function syncTriggerInputs() {
+      const triggers = appState.triggers || { split: false, timeout: false, maint: false };
+      appState.triggers = triggers;
+      const ids = { split: "trigSplit", timeout: "trigTimeout", maint: "trigMaint" };
+      Object.keys(ids).forEach((key) => {
+        const el = document.getElementById(ids[key]);
+        if (el) el.checked = !!triggers[key];
+      });
     }
 
     function render() {
@@ -1222,6 +1330,15 @@ function predictNextCard(state) {
       });
     });
 
+    document.querySelectorAll("[data-trigger]").forEach((input) => {
+      input.addEventListener("change", () => {
+        const key = input.getAttribute("data-trigger");
+        if (!appState.triggers) appState.triggers = { split: false, timeout: false, maint: false };
+        appState.triggers[key] = input.checked;
+        saveState();
+      });
+    });
+
     document.getElementById("btnAddSeq").addEventListener("click", () => {
       const input = document.getElementById("seqInput");
       const tokens = input.value.split(/[\s,]+/).filter(Boolean);
@@ -1296,7 +1413,9 @@ function predictNextCard(state) {
           const imported = JSON.parse(reader.result);
           if (!Array.isArray(imported.history)) throw new Error("Invalid session JSON: missing history array.");
           appState = { ...appState, ...imported };
+          if (!appState.triggers) appState.triggers = { split: false, timeout: false, maint: false };
           document.getElementById("codeEditor").value = appState.customCode || PRESETS.composition;
+          syncTriggerInputs();
           applyEditorCode(true);
           saveState();
           render();
