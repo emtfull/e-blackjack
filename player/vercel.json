@@ -1,0 +1,9 @@
+{
+  "redirects": [
+    {
+      "source": "/official-table.html",
+      "destination": "/",
+      "permanent": false
+    }
+  ]
+}
