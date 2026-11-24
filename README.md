@@ -1,14 +1,17 @@
 # Blackjack Prediction Lab
 
-Three pages share one browser. There is no separate game server. The prediction lab records the dealt order, Blackjack Live Table plays that order, and e Blackjack keeps five full shoes for tables 2–6.
+The player site and the backend are separate. The official table is the only page a player should open. Removing a path from that site does not reveal the lab, the mechanic shoes, or the live felt.
 
-Open two tabs on the same site when you want them to stay in step. One tab writes the shoe. The other tab reads it.
+The backend pages share one browser. The prediction lab records the dealt order, Blackjack Live Table plays that order, and e Blackjack keeps five full shoes for tables 2–6. The official table reads those cards from the backend server; it does not host the backend pages.
 
 | Page | Address | What it is |
 | --- | --- | --- |
-| Prediction Lab | `/` | Enter cards and run the next-card forecast |
-| Blackjack Live Table | `/player-simulation.html` | The felt (player simulation). Table 1 plays the entered sequence |
-| e Blackjack | `/mechanic-tables.html` | Backend shoes for tables 2–6 |
+| Official table | `http://127.0.0.1:8772/` | The player site. Live or Machine is chosen here |
+| Prediction Lab | `http://localhost:8080/` | Enter cards and run the next-card forecast |
+| Blackjack Live Table | `http://localhost:8080/player-simulation.html` | The felt. Table 1 plays the entered sequence |
+| e Blackjack | `http://localhost:8080/mechanic-tables.html` | Backend shoes for tables 2–6 |
+
+Start the backend with `python3 backend/serve.py 8080`. Start the player site with `python3 -m http.server 8772` from the `player` folder.
 
 The felt page also holds the five e Blackjack tables. Use the buttons across the top to move between them. A table change is allowed only between hands.
 
@@ -87,10 +90,13 @@ The starting bankroll is $10,000. Reset $10,000 restores it. Dealer soft 17 can 
 ## Files
 
 ```
-index.html                    Prediction Lab, served at /
-player-simulation.html        Felt (player simulation) for Blackjack Live Table and e Blackjack
-mechanic-tables.html          e Blackjack shoe backend
-vercel.json                   Sends the old lab filename to /
+player/index.html             Official table, the only player page
+player/assets                 Table artwork
+backend/index.html            Prediction Lab
+backend/player-simulation.html
+backend/mechanic-tables.html  e Blackjack shoe backend
+backend/serve.py              Backend server and the card-source store
+backend/vercel.json           Sends the old lab filename to /
 ```
 
-The old address `/blackjack-prediction-lab.html` redirects to `/`.
+The old address `/blackjack-prediction-lab.html` redirects to `/` on the backend server.

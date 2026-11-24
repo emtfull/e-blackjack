@@ -1,9 +1,3 @@
 {
-  "redirects": [
-    {
-      "source": "/blackjack-prediction-lab.html",
-      "destination": "/",
-      "permanent": false
-    }
-  ]
+  "rootDirectory": "player"
 }
