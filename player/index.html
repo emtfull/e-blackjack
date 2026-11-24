@@ -85,6 +85,16 @@
     .mode-pill.watch { color: #d6c4a4; }
     .mode-pill.solo { color: var(--gold); }
     .mode-pill.multi { color: #9fe870; border-color: rgba(159, 232, 112, 0.45); }
+    .watchers {
+      display: inline-flex; align-items: center; gap: 7px;
+      padding: 5px 11px; border-radius: 999px;
+      background: var(--glass); border: 1px solid var(--gold-soft);
+      color: #fff8ec; font: 700 13px var(--sans);
+      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.45);
+    }
+    .watchers svg { width: 16px; height: 16px; flex: 0 0 auto; color: var(--gold); }
+    .watchers b { font-variant-numeric: tabular-nums; min-width: 0.9em; text-align: right; }
+    .watchers span { font-size: 11px; letter-spacing: 0.06em; text-transform: uppercase; color: #cdbfa8; font-weight: 700; }
     .load-source {
       width: 236px; padding: 8px 10px 9px; border-radius: 12px; text-align: left;
       background: var(--glass); border: 1px solid var(--gold-soft);
@@ -452,6 +462,11 @@
       top: 8px; right: 8px; gap: 6px;
     }
     body.portrait .topright .balance { display: none; }
+    body.portrait .watchers {
+      padding: 4px 9px; gap: 5px; font-size: 12px;
+    }
+    body.portrait .watchers svg { width: 14px; height: 14px; }
+    body.portrait .watchers span { display: none; }
     body.portrait .iconbtn { width: 36px; height: 36px; }
     body.portrait .dealer-tag {
       top: 10px; padding: 2px 12px; font-size: 12px;
@@ -546,6 +561,14 @@
               <button type="button" class="iconbtn" id="btnRules" aria-label="Table rules">i</button>
             </div>
             <div class="balance" id="balancePill"></div>
+            <div class="watchers" id="watchers" title="People watching" aria-live="polite">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z" />
+                <circle cx="12" cy="12" r="3" />
+              </svg>
+              <b id="watcherCount">0</b>
+              <span>watching</span>
+            </div>
             <div class="mode-pill watch" id="modePill">Watching</div>
             <div class="load-source" id="loadSource">
               <span class="load-kicker" id="loadKicker">Loaded from machine</span>
@@ -692,6 +715,8 @@
       deadline: 0,
       timerKind: "",
       bankerSignal: false,
+      online: 0,
+      watchers: 0,
       serverNow: 0,
       clockSkew: 0,
       spot: "main",
@@ -895,6 +920,16 @@
       pill.textContent = label;
     }
 
+    function paintWatchers() {
+      const el = document.getElementById("watchers");
+      const countEl = document.getElementById("watcherCount");
+      if (!el || !countEl) return;
+      const n = Math.max(0, Number(state.watchers) || 0);
+      countEl.textContent = String(n);
+      el.title = n === 1 ? "1 person watching" : `${n} people watching`;
+      el.setAttribute("aria-label", el.title);
+    }
+
     /* ---------- network ---------- */
     let lastRenderVersion = -1;
     let flashUntil = 0;
@@ -929,6 +964,8 @@
       state.deadline = s.deadline || 0;
       state.timerKind = s.timerKind || "";
       state.bankerSignal = !!s.bankerSignal;
+      state.online = Number(s.online) || 0;
+      state.watchers = Number(s.watchers) || 0;
       state.serverNow = s.serverNow || 0;
       if (state.serverNow) state.clockSkew = Date.now() - (state.serverNow * 1000);
       if (Date.now() > flashUntil) { state.main = s.main; state.sub = s.sub; }
@@ -948,7 +985,7 @@
         if (!data.ok) throw new Error(data.error || "bad");
         applyServerState(data.state);
         if (state.version !== lastRenderVersion) { lastRenderVersion = state.version; render(); }
-        else paintLoadSource();
+        else { paintLoadSource(); paintWatchers(); }
       } catch (_) {
         if (state.connected || lastRenderVersion !== -2) {
           state.connected = false;
@@ -1282,6 +1319,7 @@
       document.getElementById("infoShoe").textContent = String(shoeCount);
       paintLoadSource();
       paintTimer();
+      paintWatchers();
       if (showServerCopy || !state.connected) {
         document.getElementById("bannerMain").textContent = state.main;
         document.getElementById("bannerSub").textContent = state.sub;

@@ -35,6 +35,7 @@ TURN_SECS = 45      # auto-stand an idle player's hand
 INS_SECS = 30       # auto-decline an idle insurance decision
 SETTLE_SECS = 25    # auto-advance to the next betting round
 IDLE_SECS = 90      # vacate seats of a player who stopped polling
+PRESENCE_SECS = 8   # drop from online/watcher counts if they stop polling
 
 ROOM_IDS = ["live", "machine-2", "machine-3", "machine-4", "machine-5", "machine-6"]
 
@@ -897,9 +898,30 @@ def next_round(room):
 
 # ------------------------- timeouts + presence -------------------------
 
+def prune_presence(room):
+    now = time.time()
+    room["players"] = {
+        pid: seen for pid, seen in room.get("players", {}).items()
+        if now - seen <= PRESENCE_SECS
+    }
+
+
+def presence_counts(room):
+    prune_presence(room)
+    seated_ids = {
+        seat["playerId"]
+        for seat in room["seats"]
+        if seat["occupied"] and seat.get("playerId")
+    }
+    online = len(room["players"])
+    watching = sum(1 for pid in room["players"] if pid not in seated_ids)
+    return online, watching
+
+
 def tick(room):
     sync_feed(room)
     now = time.time()
+    prune_presence(room)
     for _ in range(30):
         phase = room["phase"]
         if phase == "betting" and room["deadline"] and now > room["deadline"]:
@@ -1152,6 +1174,7 @@ def public_state(room):
             "lastJackpot": seat["lastJackpot"],
             "playerId": seat["playerId"],
         })
+    online, watching = presence_counts(room)
     return {
         "id": room["id"],
         "loadMode": room["loadMode"],
@@ -1171,6 +1194,8 @@ def public_state(room):
         "deadline": room["deadline"],
         "timerKind": room.get("timerKind") or "",
         "bankerSignal": bool(room.get("bankerSignal")),
+        "online": online,
+        "watchers": watching,
         "serverNow": time.time(),
     }
 
