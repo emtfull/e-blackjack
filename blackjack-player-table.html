@@ -874,7 +874,6 @@
           </div>
 
           <div class="side-row">
-            <button id="btnLoadDemo">Load Demo Shoe</button>
             <button id="btnImportJson">Import JSON</button>
             <input type="file" id="jsonFileInput" accept=".json" style="display:none" />
           </div>
@@ -917,16 +916,6 @@
     const PLAYER_STORAGE_KEY = "bj_player_table_v1";
     const RANKS = ["A", "2", "3", "4", "5", "6", "7", "8", "9", "10", "J", "Q", "K"];
     const SUIT_MAP = { "♠": "♠", "s": "♠", "♥": "♥", "h": "♥", "♦": "♦", "d": "♦", "♣": "♣", "c": "♣" };
-
-    // Built-in realistic demo sequence (includes a natural BJ, a pair, and a suited 6-7-8 test hand)
-    const DEMO_SEQUENCE = [
-      "K♠", "6♦", "A♥", "10♣",           // Hand 1: Player Natural BJ (K♠, A♥) vs Dealer 16
-      "7♠", "9♦", "7♥", "10♠", "8♣",     // Hand 2: Player Pair 7s (11:1 win!)
-      "6♠", "10♦", "7♠", "9♣", "8♠",     // Hand 3: Player hits 6♠,7♠ -> 8♠ = Suited 6-7-8 Jackpot (3:1)!
-      "A♦", "A♠", "9♥", "K♦",            // Hand 4: Dealer Ace up-card (Insurance / Even Money test)
-      "8♦", "5♣", "8♣", "10♥", "3♠", "Q♦", "7♦", "2♠", "J♣", "4♥", "K♣", "6♥",
-      "9♠", "3♦", "Q♥", "5♠", "A♣", "8♥", "10♠", "4♦", "J♦", "7♣", "2♥", "K♦"
-    ];
 
     let syncChannel = null;
     try {
@@ -1145,14 +1134,8 @@
         }
       } catch (_) {}
 
-      if ((state.labSequence || []).length === 0 && state.activeTable === 1 && state.sequence.length === 0) {
-        state.labSequence = [...DEMO_SEQUENCE];
-        state.pointers[1] = 0;
-        activateTableShoe();
-        state.sourceLabel = "Table 1 · Built-in demo";
-      }
       if (!silent) {
-        setBanner("No Backend History Found Yet", "Loaded built-in demo sequence. Enter cards in Backend Lab and click Sync Backend.");
+        setBanner("No lab sequence yet", "Deal cards in the Backend Lab. Table 1 plays that list in the order entered.");
       }
       render();
       return false;
@@ -1929,20 +1912,6 @@
 
     document.getElementById("btnTogglePeek").addEventListener("click", () => {
       state.peekNext = !state.peekNext;
-      savePlayerState();
-      render();
-    });
-
-    document.getElementById("btnLoadDemo").addEventListener("click", () => {
-      state.labSequence = [...DEMO_SEQUENCE];
-      state.pointers[1] = 0;
-      state.activeTable = 1;
-      activateTableShoe();
-      state.sourceLabel = "Table 1 · Built-in demo";
-      state.phase = "BETTING";
-      state.dealerCards = [];
-      state.playerHands = [];
-      setBanner("Demo Sequence Loaded", "Includes Natural BJ, 11:1 Pair, 3:1 Suited 6-7-8, and Dealer Ace scenarios.");
       savePlayerState();
       render();
     });
