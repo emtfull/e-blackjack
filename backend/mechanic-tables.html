@@ -321,9 +321,15 @@
       }
     }
 
+    function sourcesUrl() {
+      const host = location.hostname;
+      if (host === "localhost" || host === "127.0.0.1") return "/api/sources";
+      return "https://ebj-delta.vercel.app/api/sources";
+    }
+
     function publishSources(partial) {
       try {
-        fetch("/api/sources", {
+        fetch(sourcesUrl(), {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(partial)

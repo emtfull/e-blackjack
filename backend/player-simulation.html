@@ -1674,7 +1674,11 @@
           roundLogs: state.roundLogs
         };
         localStorage.setItem(PLAYER_STORAGE_KEY, JSON.stringify(snapshot));
-        fetch("/api/sources", {
+        const host = location.hostname;
+        const sources = (host === "localhost" || host === "127.0.0.1")
+          ? "/api/sources"
+          : "https://ebj-delta.vercel.app/api/sources";
+        fetch(sources, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ player: { sequence: state.labSequence || [] } })

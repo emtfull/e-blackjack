@@ -2,16 +2,18 @@
 
 The player site and the backend are separate. The official table is the only page a player should open. Removing a path from that site does not reveal the lab, the mechanic shoes, or the live felt.
 
+Five gadgets play together on the official table because seats and cards live on the shared `/api/room` server (Redis on Vercel). Each player opens the same URL, picks the same Live or Machine source, and sits in a free seat. A new browser tab is another player only when that tab uses a different seat — the table itself is shared.
+
 The backend pages share one browser. The prediction lab records the dealt order, Blackjack Live Table plays that order, and e Blackjack keeps five full shoes for tables 2–6. The official table reads those cards from the backend server; it does not host the backend pages.
 
 | Page | Address | What it is |
 | --- | --- | --- |
-| Official table | `http://127.0.0.1:8772/` | The player site. Live or Machine is chosen here |
-| Prediction Lab | `http://localhost:8080/` | Enter cards and run the next-card forecast |
-| Blackjack Live Table | `http://localhost:8080/player-simulation.html` | The felt. Table 1 plays the entered sequence |
-| e Blackjack | `http://localhost:8080/mechanic-tables.html` | Backend shoes for tables 2–6 |
+| Official table | `https://ebj-delta.vercel.app/` | Shared player table. Live or Machine is chosen here |
+| Prediction Lab | `https://ebj-backend.vercel.app/` | Enter cards and run the next-card forecast |
+| Blackjack Live Table | `https://ebj-backend.vercel.app/player-simulation.html` | The felt. Table 1 plays the entered sequence |
+| e Blackjack | `https://ebj-backend.vercel.app/mechanic-tables.html` | Backend shoes for tables 2–6 |
 
-Start the backend with `python3 backend/serve.py 8080`. Start the player site with `python3 -m http.server 8772` from the `player` folder.
+Local multiplayer host: `python3 server.py 8080`, then every gadget opens `http://<this-computer-ip>:8080/`.
 
 The felt page also holds the five e Blackjack tables. Use the buttons across the top to move between them. A table change is allowed only between hands.
 
