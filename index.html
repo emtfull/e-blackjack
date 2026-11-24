@@ -370,8 +370,40 @@
       padding: 10px 10px calc(10px + env(safe-area-inset-bottom)); gap: 10px 14px;
       background: linear-gradient(180deg, #120c08, #060403); border-top: 1px solid var(--gold-soft);
     }
+    .viewport { flex: none; }
+    body.portrait { overflow-y: auto; }
+    body.portrait .app { height: auto; min-height: 100dvh; justify-content: flex-start; }
+    .dock.mobile .grp.left { display: none; }
+    .dock.mobile .grp.right { flex-wrap: nowrap; gap: 8px; align-items: center; justify-content: center; }
+    .dock.mobile #chipTray { gap: 6px; }
+    .dock.mobile .chip { width: 46px; height: 46px; }
+    .dock.mobile .chip span { inset: 6px; font-size: 11px; }
+    .dock.mobile .curbet { min-width: 0; padding: 3px 10px; }
+    .dock.mobile .curbet b { font-size: 18px; }
+    .dock.mobile .mh-row { min-height: 62px; }
+    .dock.mobile .mh-hand .playing-card { width: 40px; height: 56px; margin-left: -16px; }
+    .dock.mobile .rbtn .disc { width: 52px; height: 52px; }
+    .dock.mobile .rbtn.big .disc { width: 60px; height: 60px; }
     .dock-msg { display: none; }
     .dock.mobile .dock-msg { display: block; order: 0; flex-basis: 100%; text-align: center; }
+    .mobile-hand { display: none; }
+    .dock.mobile .mobile-hand { display: block; order: 0; flex-basis: 100%; padding: 8px 10px; border-radius: 12px; background: rgba(0, 0, 0, 0.35); border: 1px solid rgba(228, 190, 106, 0.22); }
+    .mh-row { display: flex; align-items: center; gap: 10px; min-height: 70px; }
+    .mh-row + .mh-row { border-top: 1px solid rgba(255, 255, 255, 0.08); margin-top: 6px; padding-top: 6px; }
+    .mh-label { flex: 0 0 62px; font-size: 11px; letter-spacing: 0.1em; text-transform: uppercase; color: #bfae92; font-weight: 700; overflow: hidden; text-overflow: ellipsis; }
+    .mh-hands { display: flex; flex-wrap: wrap; gap: 8px 22px; flex: 1; align-items: center; }
+    .mh-hand { display: flex; align-items: center; gap: 8px; }
+    .mh-hand.active .playing-card { box-shadow: -2px 4px 9px rgba(0, 0, 0, 0.55), 0 0 0 2px #fff1c4; }
+    .mh-hand .cards-row { min-height: 0; }
+    .dock.mobile .mh-hand .playing-card { width: 44px; height: 62px; margin-left: -18px; }
+    .dock.mobile .mh-hand .playing-card:first-child { margin-left: 0; }
+    .dock.mobile .mh-hand .playing-card .mid { font-size: 24px; }
+    .mh-total { font-size: 18px; font-weight: 800; padding: 2px 8px; border-radius: 9px; background: rgba(5, 3, 2, 0.8); border: 1px solid rgba(255, 255, 255, 0.18); }
+    .mh-result { font-size: 11px; font-weight: 800; padding: 2px 8px; border-radius: 999px; color: #fff; }
+    .mh-result.win { background: #1f8f4e; }
+    .mh-result.lose { background: #a52a2a; }
+    .mh-result.push { background: #6b6b72; }
+    .mh-empty { color: #8f8068; font-size: 12px; }
     .dock-msg b { display: block; font-size: 15px; color: #fff8ec; }
     .dock-msg span { display: block; font-size: 12px; color: #cdbfa8; line-height: 1.35; }
     .dock.mobile .grp.mid { order: 1; flex-basis: 100%; gap: 10px; }
@@ -414,6 +446,7 @@
 
           <div class="dock" id="dock">
             <div class="dock-msg" id="dockMsg" role="status"><b></b><span></span></div>
+            <div class="mobile-hand" id="mobileHand" aria-label="Hands in play"></div>
             <div class="grp left">
               <div class="info"><small>Player totals</small><b id="infoTotals">—</b></div>
               <div class="info"><small>Shoe</small><b id="infoShoe">416</b></div>
@@ -729,6 +762,39 @@
       return `<div class="playing-card ${color}${size}${animClass}"${style}><div class="corner tl"><b>${rank}</b><i>${suit}</i></div>${mid}<div class="corner br"><b>${rank}</b><i>${suit}</i></div></div>`;
     }
 
+    function plainCardHtml(code, hidden) {
+      if (hidden) return '<div class="playing-card face-down" aria-label="Face down card"></div>';
+      const rank = rankOf(code);
+      const suit = suitOf(code);
+      const face = ["J", "Q", "K"].includes(rank);
+      const mid = face ? `<i class="mid face">${rank}</i>` : `<i class="mid">${suit}</i>`;
+      return `<div class="playing-card ${isRed(code) ? "red" : "black"}"><div class="corner tl"><b>${rank}</b><i>${suit}</i></div>${mid}<div class="corner br"><b>${rank}</b><i>${suit}</i></div></div>`;
+    }
+
+    /* Phone-only panel: big, readable copies of the dealer's hand and the focused seat's hands. */
+    function renderMobileHand() {
+      const el = document.getElementById("mobileHand");
+      if (!portrait) { el.innerHTML = ""; return; }
+      const index = state.phase === "acting" && state.activeSeat !== null ? state.activeSeat : state.selected;
+      const seat = state.seats[index];
+      let dealerRow = '<span class="mh-empty">Waiting for the deal</span>';
+      if (state.dealer.length) {
+        const total = state.holeHidden ? handValue([state.dealer[0]]) : handValue(state.dealer);
+        dealerRow = `<div class="mh-hand"><div class="cards-row">${state.dealer.map((c, i) => plainCardHtml(c, state.holeHidden && i === 1)).join("")}</div><span class="mh-total">${total > 21 ? "BUST" : total}</span></div>`;
+      }
+      let mine = '<span class="mh-empty">Tap a circle to sit and bet</span>';
+      if (seat && seat.occupied && seat.hands.length) {
+        mine = seat.hands.map((hand, hi) => {
+          const active = state.phase === "acting" && state.activeSeat === index && state.activeHand === hi;
+          const res = hand.result ? `<span class="mh-result ${hand.result.c}">${escapeHtml(resultText(hand.result))}</span>` : "";
+          return `<div class="mh-hand${active ? " active" : ""}"><div class="cards-row">${hand.cards.map((c) => plainCardHtml(c, false)).join("")}</div><span class="mh-total">${handValue(hand.cards)}</span>${res}</div>`;
+        }).join("");
+      } else if (seat && seat.occupied) {
+        mine = `<span class="mh-empty">${money(seat.bankroll)} · place a bet</span>`;
+      }
+      el.innerHTML = `<div class="mh-row"><span class="mh-label">Dealer</span><div class="mh-hands">${dealerRow}</div></div><div class="mh-row"><span class="mh-label">${seat && seat.occupied ? escapeHtml(seat.name) : "You"}</span><div class="mh-hands">${mine}</div></div>`;
+    }
+
     function chipStack(amount) {
       const denoms = [1000, 500, 100, 25];
       const list = [];
@@ -877,6 +943,7 @@
       document.getElementById("seats").innerHTML = state.seats.map(seatHtml).join("");
 
       renderConsole();
+      renderMobileHand();
       if (freshCards > 0) play("card");
       focusSeat();
     }
@@ -1462,8 +1529,9 @@
       const dock = document.getElementById("dock");
       const host = document.getElementById("dockHost");
       portrait = window.innerWidth < window.innerHeight * 0.95;
+      document.body.classList.toggle("portrait", portrait);
       if (portrait) {
-        stageScale = Math.max(Math.min(window.innerHeight * 0.5, 520) / STAGE_H, window.innerWidth / STAGE_W);
+        stageScale = Math.max(Math.min(window.innerHeight * 0.4, 440) / STAGE_H, window.innerWidth / STAGE_W);
         viewport.classList.add("portrait");
         viewport.style.width = "100vw";
         if (dock.parentNode !== host) host.appendChild(dock);
@@ -1493,7 +1561,7 @@
       viewport.scrollTo({ left: Math.max(0, left), behavior: "smooth" });
     }
 
-    window.addEventListener("resize", layout);
+    window.addEventListener("resize", () => { layout(); render(); });
 
     loadSeats();
     const occupied = state.seats.findIndex((seat) => seat.occupied);
