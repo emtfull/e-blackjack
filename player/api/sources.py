@@ -7,14 +7,14 @@ ROOT = Path(__file__).resolve().parent.parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from lib.rooms import handle_sources_get, handle_sources_post  # noqa: E402
+from lib.rooms import handle_sources_get, handle_sources_post, house_authorized  # noqa: E402
 
 
 class handler(BaseHTTPRequestHandler):
     def _cors(self):
         self.send_header("Access-Control-Allow-Origin", "*")
         self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-        self.send_header("Access-Control-Allow-Headers", "Content-Type")
+        self.send_header("Access-Control-Allow-Headers", "Content-Type, X-House-Key")
         self.send_header("Cache-Control", "no-store")
 
     def _json(self, status, payload):
@@ -32,7 +32,8 @@ class handler(BaseHTTPRequestHandler):
         self.end_headers()
 
     def do_GET(self):
-        self._json(200, handle_sources_get())
+        house = house_authorized(self.headers.get("X-House-Key"))
+        self._json(200, handle_sources_get(house=house))
 
     def do_POST(self):
         length = int(self.headers.get("Content-Length", "0") or 0)
@@ -42,7 +43,8 @@ class handler(BaseHTTPRequestHandler):
         except json.JSONDecodeError:
             self._json(400, {"ok": False, "error": "Bad JSON."})
             return
-        self._json(200, handle_sources_post(body))
+        house = house_authorized(self.headers.get("X-House-Key"))
+        self._json(200, handle_sources_post(body, house=house))
 
     def log_message(self, *args):
         pass

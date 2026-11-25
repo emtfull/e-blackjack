@@ -106,6 +106,14 @@
     .who { color: var(--muted); margin-right: 4px; }
     .group { display: inline-block; margin-right: 14px; white-space: nowrap; }
     .lane.next .step, .lane.closed .step { background: #3a2d12; border-radius: 4px; padding: 0 4px; }
+    .step.burn { outline: 1px solid #f87171; border-radius: 4px; }
+    .step.cut { opacity: 0.4; }
+    #houseLogin {
+      display: flex; gap: 10px; align-items: center; flex-wrap: wrap;
+      margin-bottom: 16px;
+    }
+    #houseLogin[hidden], #houseDesk[hidden] { display: none; }
+    #houseLogin input { min-width: 220px; }
     .red { color: var(--red-suit); }
     button.on { background: #3a2d12; border-color: #fbbf24; color: #fbbf24; }
   </style>
@@ -124,13 +132,21 @@
       </div>
     </header>
 
+    <form id="houseLogin">
+      <label style="color:var(--muted); font-size:0.85rem; display:flex; align-items:center; gap:6px;">
+        House key
+        <input id="houseKeyInput" type="password" autocomplete="current-password" placeholder="Owner login" />
+      </label>
+      <button class="primary" type="submit">Unlock</button>
+      <p class="status" id="houseError"></p>
+    </form>
+    <div id="houseDesk" hidden>
     <div class="actions" style="margin-bottom:12px; align-items:center;">
       <label style="color:var(--muted); font-size:0.85rem; display:flex; align-items:center; gap:6px;">
         House rules
         <select id="profileSelect">
-          <option value="standard">Standard shoe</option>
-          <option value="deep">Deep cut</option>
-          <option value="csm">CSM mix</option>
+          <option value="standard">Standard shoe · 75% cut</option>
+          <option value="csm">CSM mix · 75% cut</option>
         </select>
       </label>
       <label style="color:var(--muted); font-size:0.85rem; display:flex; align-items:center; gap:6px;">
@@ -138,17 +154,17 @@
         <input id="seedInput" type="text" placeholder="empty = new shoe each click" style="min-width:220px;" />
       </label>
       <button id="btnBuildAll" class="primary">Build all 5 shoes</button>
-      <button id="btnLatest" type="button">Full sequence</button>
     </div>
     <p class="status" id="statusLine">Loading e Blackjack shoes…</p>
     <p class="note">
       <strong>Note:</strong> The server washes each 416-card shoe, burns the first card, and stops dealing at the cut.
       Leave Seed empty and every Generate click builds a new shoe. Type a seed when you want that exact shoe again.
-      Each table shows this hand the way the felt does: the cards already face up, the hole card that is still face down, and the next card still in the shoe. The discarded burn is the first card thrown away, and it is never dealt.
+      Each table shows this hand, the full 416-card shoe, the burned card, and the fixed 75% cut. Cards past the cut are dimmed. A watch line appears when a bet jumps 4x or more while the count is rising.
       The official table loads these shoes when the player chooses Machine.
       Blackjack Live Table stays on its own sequence and is the Live choice.
     </p>
     <div class="grid" id="tableGrid"></div>
+    </div>
   </div>
 
   <script>
@@ -156,14 +172,14 @@
     const TABLE_NUMBERS = [2, 3, 4, 5, 6];
     const PROFILE_LABELS = {
       standard: "Standard shoe",
-      deep: "Deep cut",
+      deep: "75% cut",
       csm: "CSM mix"
     };
 
     let channel = null;
     try { channel = new BroadcastChannel("bj_shoe_sync"); } catch (_) {}
+    const HOUSE_KEY = "bj_house_key";
     let building = false;
-    let showFull = false;
     let liveProgress = {};
     let drawnSig = "";
 
@@ -226,10 +242,29 @@
       return payload;
     }
 
+    function houseKey() {
+      return sessionStorage.getItem(HOUSE_KEY) || "";
+    }
+
+    function houseHeaders(extra) {
+      return Object.assign({ "X-House-Key": houseKey() }, extra || {});
+    }
+
+    function showLogin(message) {
+      document.getElementById("houseLogin").hidden = false;
+      document.getElementById("houseDesk").hidden = true;
+      document.getElementById("houseError").textContent = message || "";
+    }
+
+    function showDesk() {
+      document.getElementById("houseLogin").hidden = true;
+      document.getElementById("houseDesk").hidden = false;
+    }
+
     function publishSources(partial) {
       return fetch(sourcesUrl(), {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: houseHeaders({ "Content-Type": "application/json" }),
         body: JSON.stringify(partial)
       }).then((response) => response.json());
     }
@@ -296,7 +331,7 @@
       if (!shoe.length || !info || !info.dealUntil) return "No sequence yet";
       const groups = openedGroups(progress);
       const opened = groups.length
-        ? groups.map((group) => `<span class="group"><span class="who">${group.name}</span>${group.cards.map((code) => paintCard(code)).join(" ")}</span>`).join("")
+        ? groups.map((group) => `<span class="group"><span class="who">${escapeHtml(group.name)}</span>${group.cards.map((code) => paintCard(code)).join(" ")}</span>`).join("")
         : "None yet";
       const hole = progress && progress.holeCard;
       const next = progress && progress.nextCard;
@@ -304,21 +339,25 @@
       const nextBody = next
         ? `<span class="step">${paintCard(next)}</span>`
         : "Cut reached. The next hand uses a new shoe.";
-      let rest = "";
-      if (showFull) {
-        const burn = Number(info.burn) || 0;
-        const dealt = shoe.slice(burn, info.dealUntil);
-        const place = dealPosition(info, progress);
-        const start = place.known ? place.used : 0;
-        const later = dealt.slice(start + 1);
-        rest = lane(
-          "Still in the shoe",
-          later.length
-            ? later.map((code, offset) => cardStep(start + 2 + offset, code)).join("")
-            : "None"
-        );
-      }
-      return lane("Opened", opened) + lane("Not opened yet", holeBody, "closed") + lane("Next to flip", nextBody, "next") + rest;
+      const burn = Number(info.burn) || 1;
+      const cut = Number(info.dealUntil) || shoe.length;
+      const shoeBody = shoe.map((code, index) => {
+        const mark = index < burn ? " burn" : (index >= cut ? " cut" : "");
+        return `<span class="step${mark}"><span class="idx">${index + 1}</span>${paintCard(code)}</span>`;
+      }).join("");
+      const flags = (progress && progress.watch) || [];
+      const watch = flags.length
+        ? lane("Watch", flags.slice(-6).map((flag) => `${escapeHtml(flag.name)} raised $${flag.previous} to $${flag.bet} as the count rose to ${flag.count}`).join(" · "))
+        : "";
+      return lane("Opened", opened)
+        + lane("Not opened yet", holeBody, "closed")
+        + lane("Next to flip", nextBody, "next")
+        + watch
+        + lane("Full shoe", shoeBody);
+    }
+
+    function escapeHtml(value) {
+      return String(value).replace(/[&<>"']/g, (ch) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "\"": "&quot;", "'": "&#39;" }[ch]));
     }
 
     function auditLine(info, shoe) {
@@ -408,27 +447,25 @@
     }
 
     async function pullLive() {
-      if (building) return;
+      if (building || !houseKey()) return;
       try {
-        const data = await fetch(sourcesUrl(), { cache: "no-store" }).then((response) => response.json());
+        const data = await fetch(sourcesUrl(), { cache: "no-store", headers: houseHeaders() }).then((response) => response.json());
+        if (!data || data.house !== true) {
+          sessionStorage.removeItem(HOUSE_KEY);
+          showLogin("That key does not unlock the shoe.");
+          return;
+        }
+        showDesk();
         applyServerShoes(data);
       } catch (_) {}
       await Promise.all(TABLE_NUMBERS.map(async (n) => {
         try {
-          const body = await fetch(roomUrl(n), { cache: "no-store" }).then((response) => response.json());
+          const body = await fetch(roomUrl(n), { cache: "no-store", headers: houseHeaders() }).then((response) => response.json());
           if (body && body.ok && body.state) liveProgress[n] = body.state;
         } catch (_) {}
       }));
       render();
     }
-
-    document.getElementById("btnLatest").addEventListener("click", () => {
-      showFull = !showFull;
-      const button = document.getElementById("btnLatest");
-      button.classList.toggle("on", showFull);
-      button.textContent = showFull ? "Three lines" : "Full sequence";
-      render();
-    });
 
     document.getElementById("btnBuildAll").addEventListener("click", () => {
       if (!building) buildTables(TABLE_NUMBERS);
@@ -440,17 +477,24 @@
       buildTables([Number(button.dataset.regenerate)]);
     });
 
-    const initial = readStore();
-    render();
-    pullLive();
-    setInterval(pullLive, 4000);
-    if (!initial.complete) {
-      buildTables(TABLE_NUMBERS);
+    document.getElementById("houseLogin").addEventListener("submit", (event) => {
+      event.preventDefault();
+      const key = document.getElementById("houseKeyInput").value.trim();
+      if (!key) return;
+      sessionStorage.setItem(HOUSE_KEY, key);
+      pullLive();
+    });
+
+    if (houseKey()) {
+      showDesk();
+      const initial = readStore();
+      render();
+      pullLive();
+      if (!initial.complete) buildTables(TABLE_NUMBERS);
     } else {
-      publishSources({
-        machine: { tables: initial.tables, meta: initial.meta, updatedAt: initial.updatedAt || new Date().toISOString() }
-      }).catch(() => {});
+      showLogin("");
     }
+    setInterval(pullLive, 4000);
   </script>
 </body>
 </html>

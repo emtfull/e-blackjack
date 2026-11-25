@@ -20,6 +20,7 @@ from lib.rooms import (  # noqa: E402
     handle_post,
     handle_sources_get,
     handle_sources_post,
+    house_authorized,
 )
 
 STATIC_ROUTES = {
@@ -40,7 +41,7 @@ class Handler(BaseHTTPRequestHandler):
     def _cors(self):
         self.send_header("Access-Control-Allow-Origin", "*")
         self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-        self.send_header("Access-Control-Allow-Headers", "Content-Type")
+        self.send_header("Access-Control-Allow-Headers", "Content-Type, X-House-Key")
         self.send_header("Cache-Control", "no-store")
 
     def _json(self, status, payload):
@@ -87,14 +88,16 @@ class Handler(BaseHTTPRequestHandler):
         query = parse_qs(parsed.query)
 
         if route == "/api/sources":
-            self._json(200, handle_sources_get())
+            house = house_authorized(self.headers.get("X-House-Key"))
+            self._json(200, handle_sources_get(house=house))
             return
 
         if route == "/api/room":
             room_id = (query.get("room") or ["machine-2"])[0]
             player_id = (query.get("playerId") or [None])[0]
             peek = (query.get("peek") or ["0"])[0] in ("1", "true")
-            result = handle_get(room_id, player_id, peek=peek)
+            house = house_authorized(self.headers.get("X-House-Key"))
+            result = handle_get(room_id, player_id, peek=peek, house=house)
             self._json(200 if result.get("ok") else 404, result)
             return
 
@@ -129,7 +132,8 @@ class Handler(BaseHTTPRequestHandler):
             return
 
         if route == "/api/sources":
-            self._json(200, handle_sources_post(body))
+            house = house_authorized(self.headers.get("X-House-Key"))
+            self._json(200, handle_sources_post(body, house=house))
             return
 
         if route == "/api/room":

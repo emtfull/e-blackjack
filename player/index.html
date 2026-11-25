@@ -132,6 +132,21 @@
       box-shadow: 0 0 18px rgba(159, 232, 112, 0.35);
       animation: bankerPulse 1s ease-in-out infinite;
     }
+    .timer-pill.turn {
+      border-color: #fbbf24; color: #fbbf24;
+      box-shadow: 0 0 18px rgba(251, 191, 36, 0.35);
+    }
+    #btnLeave[hidden] { display: none; }
+    #btnLeave {
+      border: 1px solid rgba(228, 190, 106, 0.45);
+      background: rgba(10, 7, 5, 0.82);
+      color: #fff8ec;
+      border-radius: 999px;
+      padding: 6px 12px;
+      font: 800 12px var(--sans);
+      letter-spacing: 0.04em;
+      cursor: pointer;
+    }
     .dealer-tag.signal {
       border-color: #9fe870; color: #9fe870;
       box-shadow: 0 0 22px rgba(159, 232, 112, 0.45);
@@ -560,6 +575,7 @@
               <button type="button" class="iconbtn" id="btnSound" aria-label="Toggle sound"></button>
               <button type="button" class="iconbtn" id="btnRules" aria-label="Table rules">i</button>
             </div>
+            <button type="button" id="btnLeave" hidden>Leave</button>
             <div class="balance" id="balancePill"></div>
             <div class="watchers" id="watchers" title="People watching" aria-live="polite">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
@@ -688,11 +704,11 @@
     function genId() {
       return "p-" + Math.random().toString(36).slice(2, 10) + Date.now().toString(36);
     }
-    let myId = QS.get("me") || localStorage.getItem(ID_KEY);
+    let myId = QS.get("me") || sessionStorage.getItem(ID_KEY);
     if (!myId) { myId = genId(); }
-    localStorage.setItem(ID_KEY, myId);
-    let myName = localStorage.getItem(NAME_KEY) || "";
-    let myAvatar = Number(localStorage.getItem(AVATAR_KEY)) || 1;
+    sessionStorage.setItem(ID_KEY, myId);
+    let myName = sessionStorage.getItem(NAME_KEY) || "";
+    let myAvatar = Number(sessionStorage.getItem(AVATAR_KEY)) || 1;
 
     function emptySeat() {
       return {
@@ -824,9 +840,25 @@
       return indexes;
     }
 
-    function wager(seat) { return seat.bet + seat.pairBet + seat.jackpotBet; }
+    function mainShown(seat) {
+      if (seat && Array.isArray(seat.hands) && seat.hands.length) {
+        const total = seat.hands.reduce((sum, hand) => sum + (Number(hand.bet) || 0), 0);
+        if (total > 0) return total;
+      }
+      return seat ? Number(seat.bet) || 0 : 0;
+    }
+    function wager(seat) { return mainShown(seat) + (Number(seat.pairBet) || 0) + (Number(seat.jackpotBet) || 0); }
     function say(main, sub) { state.main = main; state.sub = sub; }
-    function money(n) { return `$${Math.round(n).toLocaleString("en-US")}`; }
+    function money(n) {
+      const value = Math.round(Number(n) * 100) / 100;
+      const cents = Math.round(Math.abs(value) * 100) % 100 !== 0;
+      return value.toLocaleString("en-US", {
+        style: "currency",
+        currency: "USD",
+        minimumFractionDigits: cents ? 2 : 0,
+        maximumFractionDigits: 2
+      });
+    }
     function escapeHtml(value) {
       return String(value).replace(/[&<>"']/g, (ch) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "\"": "&quot;", "'": "&#39;" }[ch]));
     }
@@ -834,7 +866,7 @@
 
     function isMine(index) {
       const seat = state.seats[index];
-      return !!seat && seat.occupied && seat.playerId === myId;
+      return !!seat && seat.occupied && seat.yours === true;
     }
     function handInProgress() { return state.phase !== "betting" && state.phase !== "settled"; }
     function cardsLeft() { return state.shoeLeft || 0; }
@@ -908,7 +940,7 @@
       if (kind === "betting" && state.deadline) label = `Betting closes · ${left}s`;
       else if (kind === "banker" || signal) label = left > 0 ? `Banker signal · ${left}s` : "Banker signal · dealing";
       else if (kind === "insurance" && state.deadline) label = `Insurance · ${left}s`;
-      else if (kind === "turn" && state.deadline) label = `Player turn · ${left}s`;
+      else if (kind === "turn" && state.deadline) label = isMine(state.activeSeat) ? `Auto-stand · ${left}s` : `Player turn · ${left}s`;
       else if (kind === "next" && state.deadline) label = `Next round · ${left}s`;
       if (!label) {
         pill.hidden = true;
@@ -917,6 +949,7 @@
       }
       pill.hidden = false;
       pill.classList.toggle("banker", signal || kind === "banker");
+      pill.classList.toggle("turn", kind === "turn");
       pill.textContent = label;
     }
 
@@ -969,7 +1002,7 @@
       state.serverNow = s.serverNow || 0;
       if (state.serverNow) state.clockSkew = Date.now() - (state.serverNow * 1000);
       if (Date.now() > flashUntil) { state.main = s.main; state.sub = s.sub; }
-      const mine = state.seats.findIndex((se) => se.occupied && se.playerId === myId);
+      const mine = state.seats.findIndex((se) => se.occupied && se.yours);
       state.mySeat = mine;
       if (mine >= 0) state.selected = mine;
       else if (state.selected == null || state.selected < 0 || state.selected >= SEATS) state.selected = 2;
@@ -1259,7 +1292,7 @@
       return `<div class="${classes.join(" ")}" data-select="${index}" ${place}>
         <div class="hands">${hands}</div>
         ${spotHtml(index, "pair", "Pair", "11:1", seat.pairBet)}
-        ${spotHtml(index, "main", "Bet", "BJ 3:2", seat.bet)}
+        ${spotHtml(index, "main", "Bet", "BJ 3:2", mainShown(seat))}
         ${spotHtml(index, "jackpot", "6-7-8", "3:1", seat.jackpotBet)}
         <div class="tag"><span class="pno" style="background:${SEAT_COLORS[index]}">P${index + 1}</span><img src="${avatarSrc(seat.avatar)}" alt="" /><div class="tx"><b>${escapeHtml(seat.name)}${youTag}</b><span class="bank" data-seat="${index}">${money(bankValue(index))}</span></div></div>
         <div class="seat-badges">${badges}</div>
@@ -1393,8 +1426,7 @@
           rbtn("clear", "Clear", icons.clear, "", { disabled: !!state.bankerSignal }) +
           rbtn("rebet", "Repeat", icons.repeat, "", { disabled: !!state.bankerSignal }) +
           rbtn("wait", waiting, icons.check, state.bankerSignal ? "green" : "", { big: true, disabled: true, pulse: !!state.bankerSignal }) +
-          rbtn("rebuy", "Rebuy", icons.plus, "gold", { disabled: false }) +
-          rbtn("leave", "Leave", icons.leave, "", { disabled: false });
+          rbtn("rebuy", "Rebuy", icons.plus, "gold", { disabled: false });
       } else if (state.phase === "insurance") {
         if (insuranceMine) {
           actions =
@@ -1426,6 +1458,8 @@
         actions = rbtn("wait", "Dealer plays", icons.next, "", { disabled: true });
       }
       document.getElementById("actionBar").innerHTML = actions;
+      const leaveBtn = document.getElementById("btnLeave");
+      if (leaveBtn) leaveBtn.hidden = !iAmSeated();
     }
 
     /* ---------- joining ---------- */
@@ -1496,7 +1530,7 @@
       if (action === "clear") sendAction("clear", { seat: betTarget });
       else if (action === "rebet") { play("chip"); sendAction("rebet", { seat: betTarget }); }
       else if (action === "rebuy") { play("chip"); sendAction("rebuy", { seat: betTarget }); }
-      else if (action === "leave") sendAction("leave", { seat: betTarget });
+      else if (action === "leave") sendAction("leave", { seat: state.mySeat });
       else if (action === "deal") { flashNote("Banker deals", "Place your bet and wait for the banker signal."); }
       else if (action === "insure") { play("chip"); sendAction("insure"); }
       else if (action === "even") { play("chip"); sendAction("even"); }
@@ -1521,8 +1555,8 @@
       if (!name) return;
       myName = name;
       myAvatar = state.pendingAvatar;
-      localStorage.setItem(NAME_KEY, myName);
-      localStorage.setItem(AVATAR_KEY, String(myAvatar));
+      sessionStorage.setItem(NAME_KEY, myName);
+      sessionStorage.setItem(AVATAR_KEY, String(myAvatar));
       document.getElementById("joinMask").classList.remove("show");
       const others = seatedCount();
       flashNote(
@@ -1559,6 +1593,10 @@
       play("click");
     });
     document.getElementById("btnRules").addEventListener("click", () => document.getElementById("rulesMask").classList.add("show"));
+    document.getElementById("btnLeave").addEventListener("click", () => {
+      if (!iAmSeated()) return;
+      sendAction("leave", { seat: state.mySeat });
+    });
     document.getElementById("rulesClose").addEventListener("click", () => document.getElementById("rulesMask").classList.remove("show"));
     document.getElementById("rulesMask").addEventListener("click", (event) => {
       if (event.target.id === "rulesMask") event.target.classList.remove("show");

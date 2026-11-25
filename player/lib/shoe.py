@@ -1,8 +1,8 @@
 """House shoe for e Blackjack tables 2–6.
 
-One ordered 8-deck pack is washed, cut once inside a penetration band,
-and marked with a burn and a stop. The same profile and seed rebuild
-the same shoe. A long face, rank, or suit run is rejected and rebuilt.
+One ordered 8-deck pack is washed, cut at 75%, and marked with a burn
+and a stop. The same profile and seed rebuild the same shoe. A long
+face, rank, or suit run is rejected and rebuilt.
 """
 
 import random
@@ -115,13 +115,9 @@ def wash(cards, rng, csm):
 
 
 def cut_index(rng, profile):
-    lo = int(profile["cut_lo"] * SHOE_SIZE)
-    hi = int(profile["cut_hi"] * SHOE_SIZE)
-    if hi < lo:
-        lo, hi = hi, lo
-    # Leave the burn at index 0 and at least one card after it.
-    lo = max(lo, 2)
-    return lo + rng.randrange(hi - lo + 1)
+    """Fixed cut at 75% of the shoe, card 312. The same place every shoe."""
+    del rng, profile
+    return int(SHOE_SIZE * 0.75)
 
 
 def assemble(profile_name, seed):

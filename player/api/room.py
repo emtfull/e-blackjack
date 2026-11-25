@@ -8,14 +8,14 @@ ROOT = Path(__file__).resolve().parent.parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from lib.rooms import handle_get, handle_post  # noqa: E402
+from lib.rooms import handle_get, handle_post, house_authorized  # noqa: E402
 
 
 class handler(BaseHTTPRequestHandler):
     def _cors(self):
         self.send_header("Access-Control-Allow-Origin", "*")
         self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-        self.send_header("Access-Control-Allow-Headers", "Content-Type")
+        self.send_header("Access-Control-Allow-Headers", "Content-Type, X-House-Key")
         self.send_header("Cache-Control", "no-store")
 
     def _json(self, status, payload):
@@ -37,7 +37,8 @@ class handler(BaseHTTPRequestHandler):
         room_id = (query.get("room") or ["machine-2"])[0]
         player_id = (query.get("playerId") or [None])[0]
         peek = (query.get("peek") or ["0"])[0] in ("1", "true")
-        result = handle_get(room_id, player_id, peek=peek)
+        house = house_authorized(self.headers.get("X-House-Key"))
+        result = handle_get(room_id, player_id, peek=peek, house=house)
         self._json(200 if result.get("ok") else 404, result)
 
     def do_POST(self):

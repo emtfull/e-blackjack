@@ -8,6 +8,7 @@ KV_REST_API_URL is set, otherwise in this process for local play.
 
 import json
 import os
+import secrets
 import threading
 import time
 import urllib.error
@@ -45,6 +46,20 @@ ROOMS = {}
 
 def redis_configured():
     return bool(os.environ.get("KV_REST_API_URL") and os.environ.get("KV_REST_API_TOKEN"))
+
+
+def house_authorized(key):
+    """True only when the request carries the house key. An empty key locks the shoe."""
+    secret = os.environ.get("HOUSE_SHOE_KEY") or ""
+    given = str(key or "")
+    if not secret or not given or len(secret) != len(given):
+        return False
+    return secrets.compare_digest(given, secret)
+
+
+def chips(amount):
+    """Round to the nearest half dollar so 3:2 and insurance keep the cent."""
+    return round(float(amount) * 2) / 2
 
 
 def redis_cmd(parts):
@@ -195,6 +210,31 @@ def read_sources():
         except (json.JSONDecodeError, OSError):
             pass
     return empty_sources()
+
+
+def saved_bankroll(player_id):
+    """Last chips this player walked away with. None means they have never sat."""
+    if not player_id:
+        return None
+    ledger = read_sources().get("ledger")
+    if not isinstance(ledger, dict) or str(player_id) not in ledger:
+        return None
+    try:
+        return chips(ledger[str(player_id)])
+    except (TypeError, ValueError):
+        return None
+
+
+def remember_bankroll(player_id, amount):
+    if not player_id:
+        return
+    data = read_sources()
+    ledger = data.get("ledger")
+    if not isinstance(ledger, dict):
+        ledger = {}
+    ledger[str(player_id)] = chips(amount)
+    data["ledger"] = ledger
+    write_sources(data)
 
 
 def write_sources(data):
@@ -349,17 +389,18 @@ def owner_next_card(room):
     return ""
 
 
-def handle_get(room_id, player_id, peek=False):
+def handle_get(room_id, player_id, peek=False, house=False):
     def work(room):
         if peek:
             sync_feed(room)
         else:
             touch(room, player_id)
             tick(room)
-        state = public_state(room)
-        if peek:
+        state = public_state(room, player_id)
+        if peek and house:
             state["holeCard"] = owner_hole_card(room)
             state["nextCard"] = owner_next_card(room)
+            state["watch"] = list(room.get("watch") or [])
         return {"ok": True, "state": state}
 
     room, result = with_room(room_id, work)
@@ -375,7 +416,7 @@ def handle_post(body):
 
     def work(room):
         ok, error = do_action(room, body)
-        return {"ok": ok, "error": error, "state": public_state(room)}
+        return {"ok": ok, "error": error, "state": public_state(room, body.get("playerId"))}
 
     room, result = with_room(room_id, work)
     if room is None:
@@ -383,8 +424,30 @@ def handle_post(body):
     return result
 
 
-def handle_sources_get():
-    return read_sources()
+def public_sources(data, house):
+    """Hide the machine shoe, its seed, and the chip ledger unless the house is logged in."""
+    out = json.loads(json.dumps(data))
+    out.pop("ledger", None)
+    out["house"] = bool(house)
+    if house:
+        return out
+    machine = out.get("machine") if isinstance(out.get("machine"), dict) else {}
+    meta = {}
+    for key, info in (machine.get("meta") or {}).items():
+        if isinstance(info, dict):
+            meta[str(key)] = {
+                "profile": info.get("profile"),
+                "cutIndex": info.get("cutIndex"),
+                "burn": info.get("burn"),
+                "dealUntil": info.get("dealUntil"),
+                "longestFaceRun": info.get("longestFaceRun"),
+            }
+    out["machine"] = {"tables": {}, "meta": meta, "updatedAt": machine.get("updatedAt")}
+    return out
+
+
+def handle_sources_get(house=False):
+    return public_sources(read_sources(), house)
 
 
 def _now():
@@ -447,14 +510,19 @@ def build_and_store(build):
     return {"ok": True, "tables": tables_out, "meta": meta_out}
 
 
-def handle_sources_post(body):
+def handle_sources_post(body, house=False):
     if not isinstance(body, dict):
         return {"ok": False, "error": "Bad body."}
+    if isinstance(body.get("build"), dict) or isinstance(body.get("machine"), dict):
+        if not house:
+            return {"ok": False, "error": "House login required."}
     if isinstance(body.get("build"), dict):
         return build_and_store(body["build"])
     current = read_sources()
     for key in ("machine", "player", "lab"):
         if isinstance(body.get(key), dict):
+            if key == "machine" and not house:
+                continue
             current[key] = body[key]
     write_sources(current)
     return {"ok": True}
@@ -620,6 +688,9 @@ def commit_feed(room, cards):
     room["feedSig"] = "|".join(cards)
     if not extended:
         room["feedIndex"] = 0
+        for seat in room["seats"]:
+            seat["watchBet"] = 0
+            seat["watchCount"] = None
     else:
         room["feedIndex"] = min(room["feedIndex"], len(cards))
     room["pendingFeed"] = None
@@ -705,7 +776,45 @@ def settle_jackpot(seat):
 
 
 def money(n):
-    return f"${round(n):,}"
+    amount = chips(n)
+    if amount == int(amount):
+        return f"${int(amount):,}"
+    return f"${amount:,.2f}"
+
+
+HILO = {"2": 1, "3": 1, "4": 1, "5": 1, "6": 1, "7": 0, "8": 0, "9": 0, "10": -1, "J": -1, "Q": -1, "K": -1, "A": -1}
+
+
+def running_count(room):
+    """Hi-Lo count of cards already dealt, skipping the burn."""
+    feed = room.get("feed") or []
+    burn = int(room.get("burn") or 0)
+    end = int(room.get("feedIndex") or 0)
+    total = 0
+    for card in feed[burn:end]:
+        total += HILO.get(rank_of(card), 0)
+    return total
+
+
+def note_spread(room, index):
+    """Flag a bet that jumps 4x or more while the count is higher than at the last bet."""
+    seat = room["seats"][index]
+    bet = chips(seat.get("bet") or 0)
+    previous = chips(seat.get("watchBet") or 0)
+    count = running_count(room)
+    previous_count = seat.get("watchCount")
+    if previous >= MIN_BET and bet >= previous * 4 and previous_count is not None and count > previous_count:
+        flags = room.setdefault("watch", [])
+        flags.append({
+            "name": seat.get("name") or "Player",
+            "seat": index + 1,
+            "bet": bet,
+            "previous": previous,
+            "count": count,
+        })
+        room["watch"] = flags[-12:]
+    seat["watchBet"] = bet
+    seat["watchCount"] = count
 
 
 def deal_round(room):
@@ -725,11 +834,12 @@ def deal_round(room):
     fresh_hands(room)
     for index in players:
         seat = room["seats"][index]
-        seat["bankroll"] -= wager(seat)
+        seat["bankroll"] = chips(seat["bankroll"] - wager(seat))
         seat["lastBet"] = seat["bet"]
         seat["lastPair"] = seat["pairBet"]
         seat["lastJackpot"] = seat["jackpotBet"]
         seat["hands"] = [{"cards": [], "bet": seat["bet"], "status": "play", "result": None}]
+        note_spread(room, index)
     for _ in range(2):
         for index in players:
             card = draw(room)
@@ -869,7 +979,7 @@ def settle_all(room):
         seat = room["seats"][index]
         if seat["insurance"] > 0:
             if dealer_blackjack:
-                seat["bankroll"] += seat["insurance"] * 3
+                seat["bankroll"] = chips(seat["bankroll"] + seat["insurance"] * 3)
                 seat["badges"].append({"t": f"INSURANCE +{money(seat['insurance'] * 2)}"})
                 notes.append(f"{seat['name']} insurance wins")
             else:
@@ -891,22 +1001,27 @@ def settle_all(room):
                 hand["result"] = {"t": "PUSH", "c": "push", "d": 0}
                 notes.append(f"{seat['name']}{tag} push")
             elif natural:
-                profit = int(hand["bet"] * 1.5)
-                seat["bankroll"] += hand["bet"] + profit
+                profit = chips(hand["bet"] * 3 / 2)
+                seat["bankroll"] = chips(seat["bankroll"] + hand["bet"] + profit)
                 hand["result"] = {"t": "BLACKJACK", "c": "win", "d": profit}
                 notes.append(f"{seat['name']}{tag} blackjack")
             elif dealer_blackjack or (dealer_total <= 21 and total < dealer_total):
                 hand["result"] = {"t": "LOSE", "c": "lose", "d": -hand["bet"]}
                 notes.append(f"{seat['name']}{tag} loses")
             elif dealer_total > 21 or total > dealer_total:
-                seat["bankroll"] += hand["bet"] * 2
+                seat["bankroll"] = chips(seat["bankroll"] + hand["bet"] * 2)
                 hand["result"] = {"t": "WIN", "c": "win", "d": hand["bet"]}
                 notes.append(f"{seat['name']}{tag} wins")
             else:
-                seat["bankroll"] += hand["bet"]
+                seat["bankroll"] = chips(seat["bankroll"] + hand["bet"])
                 hand["result"] = {"t": "PUSH", "c": "push", "d": 0}
                 notes.append(f"{seat['name']}{tag} push")
         clear_bets(seat)
+    for index, seat in enumerate(room["seats"]):
+        if seat.get("occupied") and seat.get("playerId"):
+            remember_bankroll(seat["playerId"], seat.get("bankroll") or 0)
+        if seat.get("leaving"):
+            room["seats"][index] = empty_seat()
     say(room, "Round complete", " · ".join(notes) or "No bets were in action.")
 
 
@@ -976,6 +1091,7 @@ def tick(room):
             if seat["occupied"] and pid is not None:
                 last = room["players"].get(pid, 0)
                 if now - last > IDLE_SECS:
+                    remember_bankroll(pid, seat.get("bankroll") or 0)
                     room["seats"][room["seats"].index(seat)] = empty_seat()
         if room["phase"] == "betting" and not betting_seats(room):
             clear_bet_timer(room)
@@ -1014,6 +1130,9 @@ def do_action(room, body):
             return False, "Pick a seat."
         if room["seats"][index]["occupied"]:
             return False, "That seat is taken."
+        for other in room["seats"]:
+            if other["occupied"] and other.get("playerId") == player_id:
+                return False, "You already have a seat at this table."
         name = str(body.get("name", "")).strip()[:16]
         if not name:
             return False, "Enter a name."
@@ -1022,7 +1141,8 @@ def do_action(room, body):
         seat["occupied"] = True
         seat["name"] = name
         seat["avatar"] = avatar if 1 <= avatar <= 6 else 1
-        seat["bankroll"] = BUY_IN
+        saved = saved_bankroll(player_id)
+        seat["bankroll"] = BUY_IN if saved is None else saved
         seat["playerId"] = player_id
         room["seats"][index] = seat
         say(room, f"{name} sits at seat {index + 1}", "Pick a chip and tap your betting circle.")
@@ -1032,6 +1152,7 @@ def do_action(room, body):
     if action == "leaveAll":
         for i in range(SEATS):
             if seat_owned_by(room, i, player_id) and room["phase"] in ("betting", "settled"):
+                remember_bankroll(player_id, room["seats"][i].get("bankroll") or 0)
                 room["seats"][i] = empty_seat()
         bump(room)
         return True, ""
@@ -1039,7 +1160,32 @@ def do_action(room, body):
     index = body.get("seat")
     index = int(index) if index is not None else None
 
-    if action in ("bet", "clear", "rebet", "rebuy", "leave"):
+    if action == "leave":
+        if not seat_owned_by(room, index, player_id):
+            return False, "That is not your seat."
+        seat = room["seats"][index]
+        if room["phase"] in ("betting", "settled"):
+            remember_bankroll(player_id, seat.get("bankroll") or 0)
+            room["seats"][index] = empty_seat()
+            if room["phase"] == "betting" and not betting_seats(room):
+                clear_bet_timer(room)
+            say(room, "Seat open", "Another player can sit there.")
+        else:
+            for hand in seat.get("hands") or []:
+                if hand.get("status") == "play":
+                    hand["status"] = "stand"
+            seat["leaving"] = True
+            say(room, f"{seat['name']} leaves", "This hand finishes, then the seat opens.")
+            if room["phase"] == "acting" and room.get("activeSeat") == index:
+                after_player_action(room)
+            elif room["phase"] == "insurance":
+                players = betting_seats(room)
+                if room["insuranceAt"] < len(players) and players[room["insuranceAt"]] == index:
+                    advance_insurance(room)
+        bump(room)
+        return True, ""
+
+    if action in ("bet", "clear", "rebet", "rebuy"):
         if room["phase"] != "betting":
             return False, "Bet between hands."
         if not seat_owned_by(room, index, player_id):
@@ -1078,13 +1224,9 @@ def do_action(room, body):
                 if seat["bet"] >= MIN_BET:
                     arm_bet_timer(room)
         elif action == "rebuy":
-            seat["bankroll"] += BUY_IN
+            seat["bankroll"] = chips(seat["bankroll"] + BUY_IN)
+            remember_bankroll(player_id, seat["bankroll"])
             say(room, f"{seat['name']} rebuys", "Fresh chips added.")
-        elif action == "leave":
-            room["seats"][index] = empty_seat()
-            say(room, "Seat open", "Another player can sit there.")
-            if not betting_seats(room):
-                clear_bet_timer(room)
         bump(room)
         return True, ""
 
@@ -1105,9 +1247,9 @@ def do_action(room, body):
                 seat["hands"][0]["status"] = "even"
                 seat["evenMoney"] = True
         elif action == "insure":
-            cost = seat["bet"] // 2
+            cost = chips(seat["bet"] / 2)
             if cost > 0 and seat["bankroll"] >= cost:
-                seat["bankroll"] -= cost
+                seat["bankroll"] = chips(seat["bankroll"] - cost)
                 seat["insurance"] = cost
         advance_insurance(room)
         bump(room)
@@ -1141,8 +1283,9 @@ def do_action(room, body):
             card = draw(room)
             if card is None:
                 return False, "No card left to deal."
-            seat["bankroll"] -= hand["bet"]
-            hand["bet"] *= 2
+            seat["bankroll"] = chips(seat["bankroll"] - hand["bet"])
+            hand["bet"] = chips(hand["bet"] * 2)
+            seat["bet"] = chips(sum(item["bet"] for item in seat["hands"]))
             hand["cards"].append(card)
             hand["status"] = "bust" if hand_value(hand["cards"]) > 21 else "stand"
             after_player_action(room)
@@ -1153,7 +1296,7 @@ def do_action(room, body):
                 return False, "You cannot split this hand."
             if cards_left(room) < 2:
                 return False, "Not enough cards left to split."
-            seat["bankroll"] -= hand["bet"]
+            seat["bankroll"] = chips(seat["bankroll"] - hand["bet"])
             second_card = hand["cards"].pop()
             aces = rank_of(hand["cards"][0]) == "A"
             hand["cards"].append(draw(room))
@@ -1161,6 +1304,7 @@ def do_action(room, body):
             hand["status"] = "stand" if (aces or hand_value(hand["cards"]) == 21) else "play"
             second["status"] = "stand" if (aces or hand_value(second["cards"]) == 21) else "play"
             seat["hands"].append(second)
+            seat["bet"] = chips(sum(item["bet"] for item in seat["hands"]))
             after_player_action(room)
         bump(room)
         return True, ""
@@ -1176,7 +1320,7 @@ def do_action(room, body):
 
 # ------------------------- serialization -------------------------
 
-def public_state(room):
+def public_state(room, viewer_id=None):
     dealer = list(room["dealer"])
     if room["holeHidden"] and len(dealer) >= 2:
         dealer = [dealer[0]] + ["HIDDEN"] + dealer[2:]
@@ -1197,7 +1341,7 @@ def public_state(room):
             "lastBet": seat["lastBet"],
             "lastPair": seat["lastPair"],
             "lastJackpot": seat["lastJackpot"],
-            "playerId": seat["playerId"],
+            "yours": bool(viewer_id) and seat.get("playerId") == viewer_id,
         })
     online, watching = presence_counts(room)
     return {
