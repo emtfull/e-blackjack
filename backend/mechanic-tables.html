@@ -103,7 +103,9 @@
     }
     .step { display: inline-block; margin-right: 8px; white-space: nowrap; }
     .idx { color: #fbbf24; margin-right: 4px; }
-    .lane.next .step { background: #3a2d12; border-radius: 4px; padding: 0 4px; }
+    .who { color: var(--muted); margin-right: 4px; }
+    .group { display: inline-block; margin-right: 14px; white-space: nowrap; }
+    .lane.next .step, .lane.closed .step { background: #3a2d12; border-radius: 4px; padding: 0 4px; }
     .red { color: var(--red-suit); }
     button.on { background: #3a2d12; border-color: #fbbf24; color: #fbbf24; }
   </style>
@@ -142,7 +144,7 @@
     <p class="note">
       <strong>Note:</strong> The server washes each 416-card shoe, burns the first card, and stops dealing at the cut.
       Leave Seed empty and every Generate click builds a new shoe. Type a seed when you want that exact shoe again.
-      Each table shows three lines from the official table: the burned card, the next card to flip, and the cards already distributed.
+      Each table shows this hand the way the felt does: the cards already face up, the hole card that is still face down, and the next card still in the shoe. The discarded burn is the first card thrown away, and it is never dealt.
       The official table loads these shoes when the player chooses Machine.
       Blackjack Live Table stays on its own sequence and is the Live choice.
     </p>
@@ -261,45 +263,79 @@
       return `<span class="step"><span class="idx">${number}</span>${paintCard(code)}</span>`;
     }
 
-    function dealtSequence(shoe, info, progress) {
-      if (!shoe.length || !info || !info.dealUntil) return "No sequence yet";
-      const burn = Number(info.burn) || 0;
-      const dealt = shoe.slice(burn, info.dealUntil);
-      const place = dealPosition(info, progress);
-      const burnCard = burn > 0 ? shoe[burn - 1] : "";
-      const used = place.known ? place.used : 0;
-      const distributed = dealt.slice(0, used);
-      const nextCard = used < dealt.length ? dealt[used] : "";
-      const burnLane = `<div class="lane"><span class="label">Burned, not used</span>${burnCard ? paintCard(burnCard) : "None"}</div>`;
-      const nextLane = `<div class="lane next"><span class="label">Next to flip</span>${
-        nextCard ? cardStep(used + 1, nextCard) : "Cut reached. The next hand uses a new shoe."
-      }</div>`;
-      const distributedLane = `<div class="lane"><span class="label">Already distributed</span>${
-        distributed.length
-          ? distributed.map((code, index) => cardStep(index + 1, code)).join("")
-          : "None yet"
-      }</div>`;
-      let rest = "";
-      if (showFull && used + 1 < dealt.length) {
-        const later = dealt.slice(used + 1).map((code, offset) => cardStep(used + 2 + offset, code)).join("");
-        rest = `<div class="lane"><span class="label">Still in the shoe</span>${later}</div>`;
-      }
-      return burnLane + nextLane + distributedLane + rest;
+    function lane(label, body, extra) {
+      return `<div class="lane${extra ? " " + extra : ""}"><span class="label">${label}</span>${body}</div>`;
     }
 
-    function auditLine(info) {
+    function openedGroups(progress) {
+      const groups = [];
+      const seats = (progress && progress.seats) || [];
+      seats.forEach((seat) => {
+        if (!seat || !seat.occupied) return;
+        const cards = [];
+        (seat.hands || []).forEach((hand) => {
+          (hand.cards || []).forEach((code) => {
+            if (code && code !== "HIDDEN") cards.push(code);
+          });
+        });
+        if (cards.length) groups.push({ name: seat.name || "Player", cards });
+      });
+      const dealer = (progress && progress.dealer) || [];
+      const holeHidden = !!(progress && progress.holeHidden);
+      const dealerCards = [];
+      dealer.forEach((code, index) => {
+        if (!code || code === "HIDDEN") return;
+        if (holeHidden && index === 1) return;
+        dealerCards.push(code);
+      });
+      if (dealerCards.length) groups.push({ name: "Dealer", cards: dealerCards });
+      return groups;
+    }
+
+    function dealtSequence(shoe, info, progress) {
+      if (!shoe.length || !info || !info.dealUntil) return "No sequence yet";
+      const groups = openedGroups(progress);
+      const opened = groups.length
+        ? groups.map((group) => `<span class="group"><span class="who">${group.name}</span>${group.cards.map((code) => paintCard(code)).join(" ")}</span>`).join("")
+        : "None yet";
+      const hole = progress && progress.holeCard;
+      const next = progress && progress.nextCard;
+      const holeBody = hole ? `<span class="step">${paintCard(hole)}</span>` : "None";
+      const nextBody = next
+        ? `<span class="step">${paintCard(next)}</span>`
+        : "Cut reached. The next hand uses a new shoe.";
+      let rest = "";
+      if (showFull) {
+        const burn = Number(info.burn) || 0;
+        const dealt = shoe.slice(burn, info.dealUntil);
+        const place = dealPosition(info, progress);
+        const start = place.known ? place.used : 0;
+        const later = dealt.slice(start + 1);
+        rest = lane(
+          "Still in the shoe",
+          later.length
+            ? later.map((code, offset) => cardStep(start + 2 + offset, code)).join("")
+            : "None"
+        );
+      }
+      return lane("Opened", opened) + lane("Not opened yet", holeBody, "closed") + lane("Next to flip", nextBody, "next") + rest;
+    }
+
+    function auditLine(info, shoe) {
       if (!info || !info.dealUntil) return "No house shoe yet";
       const pct = Math.round((info.dealUntil / 416) * 100);
       const label = PROFILE_LABELS[info.profile] || info.profile || "House shoe";
       const face = Number.isFinite(info.longestFaceRun) ? info.longestFaceRun : "—";
-      return `${label} · ${pct}% cut · burn ${info.burn || 1} · longest face run ${face}`;
+      const burn = Number(info.burn) || 1;
+      const burnCard = shoe && shoe[burn - 1] ? paintCard(shoe[burn - 1]) : String(burn);
+      return `${label} · ${pct}% cut · discarded ${burnCard} · longest face run ${face}`;
     }
 
     function render() {
       const { tables, meta, complete } = readStore();
       const grid = document.getElementById("tableGrid");
       document.getElementById("statusLine").textContent = complete
-        ? "e Blackjack 2–6 each have a house shoe. Burned, next to flip, and already distributed follow the official table."
+        ? "e Blackjack 2–6 each have a house shoe. Opened, not opened yet, and next to flip follow the official table."
         : "Build the five shoes. Each one is a washed 416-card shoe with a burn and a cut.";
       const html = TABLE_NUMBERS.map((n) => {
         const shoe = tables[String(n)] || [];
@@ -309,7 +345,7 @@
           <article class="card">
             <h2>e Blackjack ${n}</h2>
             <div class="meta">${ready ? "416 cards · same shoe as the official table" : "Empty"}</div>
-            <div class="audit">${auditLine(info)}</div>
+            <div class="audit">${auditLine(info, shoe)}</div>
             <div class="sequence" data-sequence="${n}">${ready ? dealtSequence(shoe, info, liveProgress[n]) : "No sequence yet"}</div>
             <button type="button" data-regenerate="${n}" ${building ? "disabled" : ""}>Generate new shoe</button>
           </article>`;

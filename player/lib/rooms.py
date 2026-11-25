@@ -331,6 +331,24 @@ def with_room(room_id, fn):
         return room, result
 
 
+def owner_hole_card(room):
+    """Real hole card for the owner peek. Empty once the dealer has turned it up."""
+    dealer = room.get("dealer") or []
+    if room.get("holeHidden") and len(dealer) >= 2 and dealer[1] and dealer[1] != "HIDDEN":
+        return dealer[1]
+    return ""
+
+
+def owner_next_card(room):
+    """Next card still in the shoe. Empty once the cut has been reached."""
+    feed = room.get("feed") or []
+    index = int(room.get("feedIndex") or 0)
+    deal_until = int(room.get("dealUntil") or len(feed))
+    if 0 <= index < deal_until and index < len(feed):
+        return feed[index]
+    return ""
+
+
 def handle_get(room_id, player_id, peek=False):
     def work(room):
         if peek:
@@ -338,7 +356,11 @@ def handle_get(room_id, player_id, peek=False):
         else:
             touch(room, player_id)
             tick(room)
-        return {"ok": True, "state": public_state(room)}
+        state = public_state(room)
+        if peek:
+            state["holeCard"] = owner_hole_card(room)
+            state["nextCard"] = owner_next_card(room)
+        return {"ok": True, "state": state}
 
     room, result = with_room(room_id, work)
     if room is None:
