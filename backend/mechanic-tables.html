@@ -77,13 +77,13 @@
     .note strong { color: var(--text); }
     .grid {
       display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+      grid-template-columns: 1fr;
       gap: 12px;
     }
     .card { padding: 14px 16px; min-width: 0; }
     .card h2 { margin: 0 0 4px; font-size: 1rem; }
     .meta { color: var(--muted); font-size: 0.8rem; margin-bottom: 10px; }
-    .audit {
+    .audit, .sequence {
       font-family: var(--mono);
       font-size: 0.78rem;
       padding: 8px 10px;
@@ -91,6 +91,10 @@
       border-radius: 8px;
       margin-bottom: 10px;
     }
+    .sequence { line-height: 1.8; max-height: 240px; overflow: auto; }
+    .sequence .burn { color: var(--muted); margin-bottom: 6px; }
+    .step { display: inline-block; margin-right: 8px; white-space: nowrap; }
+    .red { color: var(--red-suit); }
   </style>
 </head>
 <body>
@@ -126,7 +130,8 @@
     <p class="note">
       <strong>Note:</strong> The server washes each 416-card shoe, burns the first card, and stops dealing at the cut.
       Leave Seed empty and every Generate click builds a new shoe. Type a seed when you want that exact shoe again.
-      The card order stays off this page. The official table loads these shoes when the player chooses Machine.
+      The sequence below is the order the player table deals: the burn is skipped, and dealing stops at the cut.
+      The official table loads these shoes when the player chooses Machine.
       Blackjack Live Table stays on its own sequence and is the Live choice.
     </p>
     <div class="grid" id="tableGrid"></div>
@@ -212,6 +217,23 @@
       });
     }
 
+    function paintCard(code) {
+      const red = code.endsWith("♥") || code.endsWith("♦");
+      return `<span class="${red ? "red" : ""}">${code}</span>`;
+    }
+
+    function dealtSequence(shoe, info) {
+      if (!shoe.length || !info || !info.dealUntil) return "No sequence yet";
+      const burn = Number(info.burn) || 0;
+      const dealt = shoe.slice(burn, info.dealUntil);
+      const burnCard = burn > 0 ? shoe[burn - 1] : "";
+      const burnLine = burnCard
+        ? `<div class="burn">Burn, not dealt: ${paintCard(burnCard)}</div>`
+        : "";
+      const cards = dealt.map((code, index) => `<span class="step">${index + 1} ${paintCard(code)}</span>`).join("");
+      return `${burnLine}<div>Dealt order, ${dealt.length} cards. Card 1 is the first card on the player table.</div><div>${cards}</div>`;
+    }
+
     function auditLine(info) {
       if (!info || !info.dealUntil) return "No house shoe yet";
       const pct = Math.round((info.dealUntil / 416) * 100);
@@ -233,8 +255,9 @@
         return `
           <article class="card">
             <h2>e Blackjack ${n}</h2>
-            <div class="meta">${ready ? "416 cards · dealing stops at the cut" : "Empty"}</div>
+            <div class="meta">${ready ? "416 cards · sequence matches the player deal" : "Empty"}</div>
             <div class="audit">${auditLine(info)}</div>
+            <div class="sequence">${ready ? dealtSequence(shoe, info) : "No sequence yet"}</div>
             <button type="button" data-regenerate="${n}" ${building ? "disabled" : ""}>Generate new shoe</button>
           </article>`;
       }).join("");
