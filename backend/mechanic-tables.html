@@ -92,9 +92,12 @@
       margin-bottom: 10px;
     }
     .sequence { line-height: 1.8; max-height: 240px; overflow: auto; }
-    .sequence .burn { color: var(--muted); margin-bottom: 6px; }
+    .sequence .burn, .live { color: var(--muted); margin-bottom: 6px; }
     .step { display: inline-block; margin-right: 8px; white-space: nowrap; }
+    .idx { color: #fbbf24; margin-right: 4px; }
+    .step.next { background: #3a2d12; border-radius: 4px; padding: 0 4px; }
     .red { color: var(--red-suit); }
+    button.on { background: #3a2d12; border-color: #fbbf24; color: #fbbf24; }
   </style>
 </head>
 <body>
@@ -125,12 +128,13 @@
         <input id="seedInput" type="text" placeholder="empty = new shoe each click" style="min-width:220px;" />
       </label>
       <button id="btnBuildAll" class="primary">Build all 5 shoes</button>
+      <button id="btnLatest" type="button" class="on">Latest only</button>
     </div>
     <p class="status" id="statusLine">Loading e Blackjack shoes…</p>
     <p class="note">
       <strong>Note:</strong> The server washes each 416-card shoe, burns the first card, and stops dealing at the cut.
       Leave Seed empty and every Generate click builds a new shoe. Type a seed when you want that exact shoe again.
-      The sequence below is the order the player table deals: the burn is skipped, and dealing stops at the cut.
+      Latest only follows the official table: gold numbers are the position, and the highlighted card is the next one the player receives.
       The official table loads these shoes when the player chooses Machine.
       Blackjack Live Table stays on its own sequence and is the Live choice.
     </p>
@@ -149,11 +153,22 @@
     let channel = null;
     try { channel = new BroadcastChannel("bj_shoe_sync"); } catch (_) {}
     let building = false;
+    let showLatest = true;
+    let liveProgress = {};
+    let drawnSig = "";
+
+    function apiBase() {
+      const host = location.hostname;
+      if (host === "localhost" || host === "127.0.0.1") return "";
+      return "https://ebj-delta.vercel.app";
+    }
 
     function sourcesUrl() {
-      const host = location.hostname;
-      if (host === "localhost" || host === "127.0.0.1") return "/api/sources";
-      return "https://ebj-delta.vercel.app/api/sources";
+      return apiBase() + "/api/sources";
+    }
+
+    function roomUrl(tableNumber) {
+      return apiBase() + "/api/room?room=machine-" + tableNumber + "&peek=1";
     }
 
     function currentProfile() {
@@ -222,16 +237,52 @@
       return `<span class="${red ? "red" : ""}">${code}</span>`;
     }
 
-    function dealtSequence(shoe, info) {
+    function dealPosition(info, progress) {
+      const burn = Number(info && info.burn) || 0;
+      const dealUntil = Number(info && info.dealUntil) || 0;
+      const total = Math.max(0, dealUntil - burn);
+      if (!progress || !progress.shoeLen) return { used: 0, total, known: false };
+      const feedIndex = Number(progress.feedIndex);
+      const used = Number.isFinite(feedIndex)
+        ? feedIndex - burn
+        : dealUntil - (Number(progress.shoeLeft) || 0) - burn;
+      return { used: Math.max(0, Math.min(total, used)), total, known: true };
+    }
+
+    function liveLine(info, progress) {
+      if (!info || !info.dealUntil) return "No house shoe yet";
+      const place = dealPosition(info, progress);
+      if (!place.known) return "Waiting for the player table…";
+      if (place.used >= place.total) return "Cut reached on the player table. The next hand uses a new shoe.";
+      const next = place.used + 1;
+      return `Player has taken ${place.used} of ${place.total}. Next is card ${next}.`;
+    }
+
+    function dealtSequence(shoe, info, progress) {
       if (!shoe.length || !info || !info.dealUntil) return "No sequence yet";
       const burn = Number(info.burn) || 0;
       const dealt = shoe.slice(burn, info.dealUntil);
+      const place = dealPosition(info, progress);
       const burnCard = burn > 0 ? shoe[burn - 1] : "";
       const burnLine = burnCard
         ? `<div class="burn">Burn, not dealt: ${paintCard(burnCard)}</div>`
         : "";
-      const cards = dealt.map((code, index) => `<span class="step">${index + 1} ${paintCard(code)}</span>`).join("");
-      return `${burnLine}<div>Dealt order, ${dealt.length} cards. Card 1 is the first card on the player table.</div><div>${cards}</div>`;
+      let start = 0;
+      let end = dealt.length;
+      if (showLatest) {
+        const anchor = place.known ? place.used : 0;
+        start = Math.max(0, anchor - 8);
+        end = Math.min(dealt.length, anchor + 8);
+      }
+      const cards = dealt.slice(start, end).map((code, offset) => {
+        const number = start + offset + 1;
+        const next = place.known && number === place.used + 1;
+        return `<span class="step${next ? " next" : ""}"><span class="idx">${number}</span>${paintCard(code)}</span>`;
+      }).join("");
+      const windowLabel = showLatest
+        ? `Latest cards ${start + 1}–${end}. The gold box is the next card on the player table.`
+        : `Full dealt order, ${dealt.length} cards.`;
+      return `${burnLine}<div>${windowLabel}</div><div>${cards}</div>`;
     }
 
     function auditLine(info) {
@@ -246,21 +297,25 @@
       const { tables, meta, complete } = readStore();
       const grid = document.getElementById("tableGrid");
       document.getElementById("statusLine").textContent = complete
-        ? "e Blackjack 2–6 each have a house shoe. The cut ends the deal. Leave the seed empty and Generate builds a new one."
+        ? "e Blackjack 2–6 each have a house shoe. Latest only follows the card the player table deals next."
         : "Build the five shoes. Each one is a washed 416-card shoe with a burn and a cut.";
-      grid.innerHTML = TABLE_NUMBERS.map((n) => {
+      const html = TABLE_NUMBERS.map((n) => {
         const shoe = tables[String(n)] || [];
         const info = meta[String(n)];
         const ready = shoe.length === 416 && info && info.dealUntil;
         return `
           <article class="card">
             <h2>e Blackjack ${n}</h2>
-            <div class="meta">${ready ? "416 cards · sequence matches the player deal" : "Empty"}</div>
+            <div class="meta">${ready ? "416 cards · same shoe as the official table" : "Empty"}</div>
             <div class="audit">${auditLine(info)}</div>
-            <div class="sequence">${ready ? dealtSequence(shoe, info) : "No sequence yet"}</div>
+            <div class="live" data-live="${n}">${ready ? liveLine(info, liveProgress[n]) : ""}</div>
+            <div class="sequence" data-sequence="${n}">${ready ? dealtSequence(shoe, info, liveProgress[n]) : "No sequence yet"}</div>
             <button type="button" data-regenerate="${n}" ${building ? "disabled" : ""}>Generate new shoe</button>
           </article>`;
       }).join("");
+      if (html === drawnSig) return;
+      drawnSig = html;
+      grid.innerHTML = html;
     }
 
     function mergeBuilt(payload) {
@@ -295,6 +350,49 @@
       render();
     }
 
+    function applyServerShoes(data) {
+      const machine = (data && data.machine) || {};
+      const tables = machine.tables || {};
+      const meta = machine.meta || {};
+      const nextTables = emptyTables();
+      const nextMeta = {};
+      let complete = true;
+      TABLE_NUMBERS.forEach((n) => {
+        const shoe = tables[n] || tables[String(n)];
+        const info = meta[n] || meta[String(n)];
+        if (Array.isArray(shoe) && shoe.length === 416 && info && info.dealUntil) {
+          nextTables[String(n)] = shoe;
+          nextMeta[String(n)] = info;
+        } else complete = false;
+      });
+      if (!complete) return false;
+      saveStore(nextTables, nextMeta, machine.updatedAt || new Date().toISOString());
+      return true;
+    }
+
+    async function pullLive() {
+      if (building) return;
+      try {
+        const data = await fetch(sourcesUrl(), { cache: "no-store" }).then((response) => response.json());
+        applyServerShoes(data);
+      } catch (_) {}
+      await Promise.all(TABLE_NUMBERS.map(async (n) => {
+        try {
+          const body = await fetch(roomUrl(n), { cache: "no-store" }).then((response) => response.json());
+          if (body && body.ok && body.state) liveProgress[n] = body.state;
+        } catch (_) {}
+      }));
+      render();
+    }
+
+    document.getElementById("btnLatest").addEventListener("click", () => {
+      showLatest = !showLatest;
+      const button = document.getElementById("btnLatest");
+      button.classList.toggle("on", showLatest);
+      button.textContent = showLatest ? "Latest only" : "Full sequence";
+      render();
+    });
+
     document.getElementById("btnBuildAll").addEventListener("click", () => {
       if (!building) buildTables(TABLE_NUMBERS);
     });
@@ -307,6 +405,8 @@
 
     const initial = readStore();
     render();
+    pullLive();
+    setInterval(pullLive, 4000);
     if (!initial.complete) {
       buildTables(TABLE_NUMBERS);
     } else {

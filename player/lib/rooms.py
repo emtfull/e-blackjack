@@ -331,10 +331,13 @@ def with_room(room_id, fn):
         return room, result
 
 
-def handle_get(room_id, player_id):
+def handle_get(room_id, player_id, peek=False):
     def work(room):
-        touch(room, player_id)
-        tick(room)
+        if peek:
+            sync_feed(room)
+        else:
+            touch(room, player_id)
+            tick(room)
         return {"ok": True, "state": public_state(room)}
 
     room, result = with_room(room_id, work)
@@ -1190,6 +1193,7 @@ def public_state(room):
         "sub": room["sub"],
         "shoeLeft": cards_left(room),
         "shoeLen": len(room["feed"]),
+        "feedIndex": room.get("feedIndex", 0),
         "version": room["version"],
         "deadline": room["deadline"],
         "timerKind": room.get("timerKind") or "",

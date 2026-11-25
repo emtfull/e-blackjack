@@ -93,7 +93,8 @@ class Handler(BaseHTTPRequestHandler):
         if route == "/api/room":
             room_id = (query.get("room") or ["machine-2"])[0]
             player_id = (query.get("playerId") or [None])[0]
-            result = handle_get(room_id, player_id)
+            peek = (query.get("peek") or ["0"])[0] in ("1", "true")
+            result = handle_get(room_id, player_id, peek=peek)
             self._json(200 if result.get("ok") else 404, result)
             return
 
