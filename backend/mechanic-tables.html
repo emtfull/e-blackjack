@@ -91,11 +91,19 @@
       border-radius: 8px;
       margin-bottom: 10px;
     }
-    .sequence { line-height: 1.8; max-height: 240px; overflow: auto; }
-    .sequence .burn, .live { color: var(--muted); margin-bottom: 6px; }
+    .sequence { line-height: 1.8; max-height: 280px; overflow: auto; }
+    .lane { margin-bottom: 8px; }
+    .lane .label {
+      display: block;
+      color: #fbbf24;
+      font-size: 0.72rem;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+      margin-bottom: 2px;
+    }
     .step { display: inline-block; margin-right: 8px; white-space: nowrap; }
     .idx { color: #fbbf24; margin-right: 4px; }
-    .step.next { background: #3a2d12; border-radius: 4px; padding: 0 4px; }
+    .lane.next .step { background: #3a2d12; border-radius: 4px; padding: 0 4px; }
     .red { color: var(--red-suit); }
     button.on { background: #3a2d12; border-color: #fbbf24; color: #fbbf24; }
   </style>
@@ -128,13 +136,13 @@
         <input id="seedInput" type="text" placeholder="empty = new shoe each click" style="min-width:220px;" />
       </label>
       <button id="btnBuildAll" class="primary">Build all 5 shoes</button>
-      <button id="btnLatest" type="button" class="on">Latest only</button>
+      <button id="btnLatest" type="button">Full sequence</button>
     </div>
     <p class="status" id="statusLine">Loading e Blackjack shoes…</p>
     <p class="note">
       <strong>Note:</strong> The server washes each 416-card shoe, burns the first card, and stops dealing at the cut.
       Leave Seed empty and every Generate click builds a new shoe. Type a seed when you want that exact shoe again.
-      Latest only follows the official table: gold numbers are the position, and the highlighted card is the next one the player receives.
+      Each table shows three lines from the official table: the burned card, the next card to flip, and the cards already distributed.
       The official table loads these shoes when the player chooses Machine.
       Blackjack Live Table stays on its own sequence and is the Live choice.
     </p>
@@ -153,7 +161,7 @@
     let channel = null;
     try { channel = new BroadcastChannel("bj_shoe_sync"); } catch (_) {}
     let building = false;
-    let showLatest = true;
+    let showFull = false;
     let liveProgress = {};
     let drawnSig = "";
 
@@ -249,13 +257,8 @@
       return { used: Math.max(0, Math.min(total, used)), total, known: true };
     }
 
-    function liveLine(info, progress) {
-      if (!info || !info.dealUntil) return "No house shoe yet";
-      const place = dealPosition(info, progress);
-      if (!place.known) return "Waiting for the player table…";
-      if (place.used >= place.total) return "Cut reached on the player table. The next hand uses a new shoe.";
-      const next = place.used + 1;
-      return `Player has taken ${place.used} of ${place.total}. Next is card ${next}.`;
+    function cardStep(number, code) {
+      return `<span class="step"><span class="idx">${number}</span>${paintCard(code)}</span>`;
     }
 
     function dealtSequence(shoe, info, progress) {
@@ -264,25 +267,24 @@
       const dealt = shoe.slice(burn, info.dealUntil);
       const place = dealPosition(info, progress);
       const burnCard = burn > 0 ? shoe[burn - 1] : "";
-      const burnLine = burnCard
-        ? `<div class="burn">Burn, not dealt: ${paintCard(burnCard)}</div>`
-        : "";
-      let start = 0;
-      let end = dealt.length;
-      if (showLatest) {
-        const anchor = place.known ? place.used : 0;
-        start = Math.max(0, anchor - 8);
-        end = Math.min(dealt.length, anchor + 8);
+      const used = place.known ? place.used : 0;
+      const distributed = dealt.slice(0, used);
+      const nextCard = used < dealt.length ? dealt[used] : "";
+      const burnLane = `<div class="lane"><span class="label">Burned, not used</span>${burnCard ? paintCard(burnCard) : "None"}</div>`;
+      const nextLane = `<div class="lane next"><span class="label">Next to flip</span>${
+        nextCard ? cardStep(used + 1, nextCard) : "Cut reached. The next hand uses a new shoe."
+      }</div>`;
+      const distributedLane = `<div class="lane"><span class="label">Already distributed</span>${
+        distributed.length
+          ? distributed.map((code, index) => cardStep(index + 1, code)).join("")
+          : "None yet"
+      }</div>`;
+      let rest = "";
+      if (showFull && used + 1 < dealt.length) {
+        const later = dealt.slice(used + 1).map((code, offset) => cardStep(used + 2 + offset, code)).join("");
+        rest = `<div class="lane"><span class="label">Still in the shoe</span>${later}</div>`;
       }
-      const cards = dealt.slice(start, end).map((code, offset) => {
-        const number = start + offset + 1;
-        const next = place.known && number === place.used + 1;
-        return `<span class="step${next ? " next" : ""}"><span class="idx">${number}</span>${paintCard(code)}</span>`;
-      }).join("");
-      const windowLabel = showLatest
-        ? `Latest cards ${start + 1}–${end}. The gold box is the next card on the player table.`
-        : `Full dealt order, ${dealt.length} cards.`;
-      return `${burnLine}<div>${windowLabel}</div><div>${cards}</div>`;
+      return burnLane + nextLane + distributedLane + rest;
     }
 
     function auditLine(info) {
@@ -297,7 +299,7 @@
       const { tables, meta, complete } = readStore();
       const grid = document.getElementById("tableGrid");
       document.getElementById("statusLine").textContent = complete
-        ? "e Blackjack 2–6 each have a house shoe. Latest only follows the card the player table deals next."
+        ? "e Blackjack 2–6 each have a house shoe. Burned, next to flip, and already distributed follow the official table."
         : "Build the five shoes. Each one is a washed 416-card shoe with a burn and a cut.";
       const html = TABLE_NUMBERS.map((n) => {
         const shoe = tables[String(n)] || [];
@@ -308,7 +310,6 @@
             <h2>e Blackjack ${n}</h2>
             <div class="meta">${ready ? "416 cards · same shoe as the official table" : "Empty"}</div>
             <div class="audit">${auditLine(info)}</div>
-            <div class="live" data-live="${n}">${ready ? liveLine(info, liveProgress[n]) : ""}</div>
             <div class="sequence" data-sequence="${n}">${ready ? dealtSequence(shoe, info, liveProgress[n]) : "No sequence yet"}</div>
             <button type="button" data-regenerate="${n}" ${building ? "disabled" : ""}>Generate new shoe</button>
           </article>`;
@@ -386,10 +387,10 @@
     }
 
     document.getElementById("btnLatest").addEventListener("click", () => {
-      showLatest = !showLatest;
+      showFull = !showFull;
       const button = document.getElementById("btnLatest");
-      button.classList.toggle("on", showLatest);
-      button.textContent = showLatest ? "Latest only" : "Full sequence";
+      button.classList.toggle("on", showFull);
+      button.textContent = showFull ? "Three lines" : "Full sequence";
       render();
     });
 
