@@ -138,6 +138,7 @@
         <input id="houseKeyInput" type="password" autocomplete="current-password" placeholder="Owner login" />
       </label>
       <button class="primary" type="submit">Unlock</button>
+      <button id="btnEmailKey" type="button">Email me the key</button>
       <p class="status" id="houseError"></p>
     </form>
     <div id="houseDesk" hidden>
@@ -475,6 +476,11 @@
       const button = event.target.closest("[data-regenerate]");
       if (!button || building) return;
       buildTables([Number(button.dataset.regenerate)]);
+    });
+
+    document.getElementById("btnEmailKey").addEventListener("click", () => {
+      document.getElementById("houseError").textContent = "The key is in your email at info.emtfull@gmail.com.";
+      window.open("https://mail.google.com/mail/u/0/#search/e+Blackjack+house+key", "_blank", "noopener");
     });
 
     document.getElementById("houseLogin").addEventListener("submit", (event) => {
